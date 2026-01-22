@@ -1,4 +1,4 @@
-# Copyright 2026 John Vial
+# Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -32,7 +32,7 @@ def list_tests_main(args: Optional[List[str]] = None) -> int:
     )
     parser.add_argument(
         "--pattern",
-        help="Glob pattern to filter tests (e.g., 'test_trailer*')",
+        help="Glob pattern to filter tests (e.g., 'test_nav*')",
     )
     parser.add_argument(
         "-v", "--verbose",

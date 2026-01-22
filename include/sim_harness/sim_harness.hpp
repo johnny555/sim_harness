@@ -1,4 +1,4 @@
-// Copyright 2026 John Vial
+// Copyright 2026 The sim_harness Authors
 // SPDX-License-Identifier: Apache-2.0
 //
 // sim_test_utils - Simulator-agnostic C++ test utilities for ROS 2

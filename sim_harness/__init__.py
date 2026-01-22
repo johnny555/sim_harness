@@ -1,4 +1,4 @@
-# Copyright 2026 John Vial
+# Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -24,8 +24,13 @@ Example usage:
 from sim_harness.core.test_fixture import SimTestFixture
 from sim_harness.core.simulation_fixture import (
     SimulationTestFixture,
-    simulation_launcher,
+    simulation_manager,
     session_simulation,
+)
+from sim_harness.simulator.simulation_manager import (
+    SimulationManager,
+    SimulationRequest,
+    get_simulation_manager,
 )
 from sim_harness.core.message_collector import MessageCollector
 from sim_harness.core.spin_helpers import (
@@ -144,7 +149,7 @@ __all__ = [
     # Core
     'SimTestFixture',
     'SimulationTestFixture',
-    'simulation_launcher',
+    'simulation_manager',
     'session_simulation',
     'MessageCollector',
     'spin_for_duration',
@@ -162,6 +167,9 @@ __all__ = [
     'SimulationLauncher',
     'LaunchConfig',
     'kill_all_gazebo',
+    'SimulationManager',
+    'SimulationRequest',
+    'get_simulation_manager',
     # Validation
     'ValidationResult',
     'ValidationResultCollector',

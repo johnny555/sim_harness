@@ -1,4 +1,4 @@
-# Copyright 2026 John Vial
+# Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -95,12 +95,12 @@ def assert_vehicle_moved(
 
     Args:
         node: ROS 2 node for subscriptions/publishers
-        vehicle_id: Vehicle namespace (e.g., "yt222_01")
+        vehicle_id: Vehicle namespace (e.g., "robot_01")
         min_distance: Minimum distance to move (meters)
         velocity: Forward velocity to command (m/s)
         timeout_sec: Maximum time to wait
-        odom_topic: Custom odometry topic (default: /{vehicle_id}/steering_controller/odometry)
-        cmd_vel_topic: Custom cmd_vel topic (default: /{vehicle_id}/steering_controller/reference)
+        odom_topic: Custom odometry topic (default: /{vehicle_id}/odom)
+        cmd_vel_topic: Custom cmd_vel topic (default: /{vehicle_id}/cmd_vel)
         use_twist_stamped: Use TwistStamped instead of Twist
 
     Returns:
@@ -111,9 +111,9 @@ def assert_vehicle_moved(
 
     # Default topic names
     if odom_topic is None:
-        odom_topic = f"/{vehicle_id}/steering_controller/odometry"
+        odom_topic = f"/{vehicle_id}/odom"
     if cmd_vel_topic is None:
-        cmd_vel_topic = f"/{vehicle_id}/steering_controller/reference"
+        cmd_vel_topic = f"/{vehicle_id}/cmd_vel"
 
     latest_odom: Optional[Odometry] = None
 
@@ -245,7 +245,7 @@ def assert_vehicle_stationary(
     executor.add_node(node)
 
     if odom_topic is None:
-        odom_topic = f"/{vehicle_id}/steering_controller/odometry"
+        odom_topic = f"/{vehicle_id}/odom"
 
     max_velocity_seen = 0.0
 
@@ -309,7 +309,7 @@ def assert_vehicle_velocity(
     executor.add_node(node)
 
     if odom_topic is None:
-        odom_topic = f"/{vehicle_id}/steering_controller/odometry"
+        odom_topic = f"/{vehicle_id}/odom"
 
     latest_velocity = 0.0
 
@@ -382,7 +382,7 @@ def assert_vehicle_in_region(
     executor.add_node(node)
 
     if odom_topic is None:
-        odom_topic = f"/{vehicle_id}/steering_controller/odometry"
+        odom_topic = f"/{vehicle_id}/odom"
 
     position: Optional[Tuple[float, float, float]] = None
 
@@ -447,7 +447,7 @@ def assert_vehicle_orientation(
     executor.add_node(node)
 
     if odom_topic is None:
-        odom_topic = f"/{vehicle_id}/steering_controller/odometry"
+        odom_topic = f"/{vehicle_id}/odom"
 
     current_yaw: Optional[float] = None
 

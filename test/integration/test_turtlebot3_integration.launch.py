@@ -1,4 +1,4 @@
-# Copyright 2026 John Vial
+# Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
 """Launch testing integration test for TurtleBot3 with Nav2 and Gazebo."""
 

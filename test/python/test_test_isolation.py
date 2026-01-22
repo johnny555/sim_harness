@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2026 John Vial
+# Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Unit tests for test isolation module."""

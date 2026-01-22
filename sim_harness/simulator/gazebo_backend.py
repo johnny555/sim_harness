@@ -1,4 +1,4 @@
-# Copyright 2026 John Vial
+# Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -40,15 +40,45 @@ def _find_pids_by_pattern(pattern: str) -> Set[int]:
             timeout=5
         )
         pids = set()
+        my_pid = os.getpid()
         for line in result.stdout.strip().split('\n'):
             if line:
                 try:
-                    pids.add(int(line))
+                    pid = int(line)
+                    # Exclude our own process and parent processes
+                    if pid != my_pid and pid != os.getppid():
+                        # Verify this is actually a Gazebo binary, not just a command containing the pattern
+                        if _is_gazebo_process(pid):
+                            pids.add(pid)
                 except ValueError:
                     pass
         return pids
     except Exception:
         return set()
+
+
+def _is_gazebo_process(pid: int) -> bool:
+    """Check if a PID is actually a Gazebo process (not just a command mentioning gz)."""
+    try:
+        # Read the process executable
+        exe_path = os.readlink(f"/proc/{pid}/exe")
+        exe_name = os.path.basename(exe_path)
+        # Gazebo executables: gz, gzserver, gzclient, ruby (for gz wrapper)
+        gazebo_exes = {"gz", "gzserver", "gzclient", "ruby", "gz-sim"}
+        if exe_name in gazebo_exes:
+            return True
+        # Also check if the command starts with gz (not just contains it)
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            cmdline = f.read().decode("utf-8", errors="replace")
+            # cmdline uses null bytes as separators
+            args = cmdline.split('\x00')
+            if args and args[0]:
+                cmd_name = os.path.basename(args[0])
+                if cmd_name in gazebo_exes or cmd_name.startswith("gz-"):
+                    return True
+        return False
+    except (OSError, IOError):
+        return False
 
 
 def _kill_processes_by_pattern(pattern: str, signal: int = 9) -> None:

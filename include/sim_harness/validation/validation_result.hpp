@@ -1,4 +1,4 @@
-// Copyright 2026 John Vial
+// Copyright 2026 The sim_harness Authors
 // SPDX-License-Identifier: Apache-2.0
 
 #ifndef SIM_HARNESS__VALIDATION__VALIDATION_RESULT_HPP_

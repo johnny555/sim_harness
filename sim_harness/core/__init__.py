@@ -1,4 +1,4 @@
-# Copyright 2026 John Vial
+# Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Core test infrastructure for ROS 2 simulation testing."""
@@ -6,7 +6,7 @@
 from sim_harness.core.test_fixture import SimTestFixture
 from sim_harness.core.simulation_fixture import (
     SimulationTestFixture,
-    simulation_launcher,
+    simulation_manager,
     session_simulation,
 )
 from sim_harness.core.message_collector import MessageCollector
@@ -25,7 +25,7 @@ from sim_harness.core.test_isolation import (
 __all__ = [
     'SimTestFixture',
     'SimulationTestFixture',
-    'simulation_launcher',
+    'simulation_manager',
     'session_simulation',
     'MessageCollector',
     'spin_for_duration',

@@ -1,0 +1,91 @@
+site_name: sim_harness
+site_description: A ROS 2 simulation testing framework for robotics applications
+site_url: https://johnny555.github.io/sim_harness/
+repo_url: https://github.com/johnny555/sim_harness
+repo_name: johnny555/sim_harness
+
+theme:
+  name: material
+  palette:
+    # Light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [sim_harness]
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Your First Test: getting-started/first-test.md
+  - User Guide:
+    - Writing Tests: guide/writing-tests.md
+    - Test Fixtures: guide/fixtures.md
+    - Message Collection: guide/message-collection.md
+    - Simulation Control: guide/simulation-control.md
+    - Assertions: guide/assertions.md
+    - Requirement Tracing: guide/requirements.md
+  - API Reference:
+    - Core: api/core.md
+    - Primitives: api/primitives.md
+    - Simulation: api/simulation.md
+    - Validation: api/validation.md
+  - Examples:
+    - TurtleBot3 Integration: examples/turtlebot3.md
+    - Custom Robot: examples/custom-robot.md
+  - Contributing: contributing.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/johnny555/sim_harness

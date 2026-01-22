@@ -57,3 +57,4 @@ test_results/
 
 # Documentation builds
 docs/_build/
+site/

@@ -1,4 +1,4 @@
-# Copyright 2026 John Vial
+# Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -181,7 +181,7 @@ class TestRegistry:
 
         Args:
             packages: List of package names to search. If None, searches all.
-            pattern: Glob pattern to filter tests (e.g., "test_trailer*")
+            pattern: Glob pattern to filter tests (e.g., "test_nav*")
 
         Returns:
             List of TestInfo objects for discovered tests.
@@ -240,8 +240,8 @@ class TestRegistry:
         """Get a test by name or path.
 
         Args:
-            name_or_path: Test name (e.g., "test_trailer_physics") or
-                         relative path (e.g., "src/sim/test/test_trailer_physics.py")
+            name_or_path: Test name (e.g., "test_robot_navigation") or
+                         relative path (e.g., "src/my_package/test/test_robot_navigation.py")
 
         Returns:
             TestInfo if found, None otherwise.

@@ -1,4 +1,4 @@
-# Copyright 2026 John Vial
+# Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -63,9 +63,38 @@ class SimTestFixture(RequirementValidator):
         """
         # Setup
         self._setup_test()
+        self.on_setup()  # Hook for subclass setup
         yield
         # Teardown
+        self.on_teardown()  # Hook for subclass teardown
         self._teardown_test()
+
+    def on_setup(self) -> None:
+        """
+        Hook for subclass setup after ROS initialization.
+
+        Override this method in subclasses to perform additional setup
+        after the ROS node and executor are initialized. This is the
+        proper place to create TF listeners, publishers, collectors, etc.
+
+        Example:
+            class TestMyRobot(SimTestFixture):
+                def on_setup(self):
+                    self.tf_buffer = Buffer()
+                    self.tf_listener = TransformListener(self.tf_buffer, self.node)
+                    self.cmd_pub = self.node.create_publisher(Twist, '/cmd_vel', 10)
+        """
+        pass
+
+    def on_teardown(self) -> None:
+        """
+        Hook for subclass teardown before ROS cleanup.
+
+        Override this method in subclasses to perform cleanup before
+        the ROS node is destroyed. Use this to destroy publishers,
+        timers, or other resources created in on_setup().
+        """
+        pass
 
     def _setup_test(self) -> None:
         """Initialize ROS 2 node and executor for the test."""

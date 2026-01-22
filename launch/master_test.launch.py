@@ -1,4 +1,4 @@
-# Copyright 2026 John Vial
+# Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -10,7 +10,7 @@ making it the standard entry point for test execution.
 Usage:
     # Run a specific test by path
     ros2 launch sim_harness master_test.launch.py \
-        test_file:=src/simulator/sim/test/integration/test_trailer_physics.py
+        test_file:=src/my_package/test/integration/test_robot_navigation.py
 
     # Run with specific timeout
     ros2 launch sim_harness master_test.launch.py \
