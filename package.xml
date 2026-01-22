@@ -1,0 +1,67 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>sim_harness</name>
+  <version>1.0.0</version>
+  <description>
+    Unified C++ and Python test harness for ROS 2 simulation testing.
+    Provides reusable test fixtures, message collection, requirements validation,
+    and high-level test primitives for vehicle, sensor, navigation, and lifecycle testing.
+    Supports launch_testing orchestration for integration tests.
+  </description>
+  <maintainer email="john@example.com">John</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- Build system: ament_cmake_python for mixed C++/Python -->
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <!-- Core ROS 2 C++ -->
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>rclcpp_action</depend>
+
+  <!-- Core ROS 2 Python -->
+  <depend>rclpy</depend>
+
+  <!-- Messages (shared) -->
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2_msgs</depend>
+  <depend>lifecycle_msgs</depend>
+  <depend>rcl_interfaces</depend>
+
+  <!-- Controller/Navigation -->
+  <depend>controller_manager_msgs</depend>
+  <depend>nav2_msgs</depend>
+  <depend>tf2_ros</depend>
+
+  <!-- Launch testing -->
+  <depend>launch</depend>
+  <depend>launch_ros</depend>
+  <depend>launch_testing</depend>
+  <depend>launch_testing_ros</depend>
+
+  <!-- C++ Testing -->
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>launch_testing_ament_cmake</test_depend>
+
+  <!-- Python Testing -->
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>python3-pytest-cov</test_depend>
+
+  <!-- Linting (optional) -->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+
+  <!-- Integration test dependencies (optional) -->
+  <test_depend condition="$ROS_DISTRO == jazzy">turtlebot3_gazebo</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
