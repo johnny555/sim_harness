@@ -2,41 +2,14 @@
 
 A ROS 2 simulation testing framework for robotics applications.
 
-<div class="grid cards" markdown>
+---
 
--   :material-clock-fast:{ .lg .middle } __Quick to Set Up__
+**Quick to Set Up** · **pytest Integration** · **Simulation Control** · **Requirement Tracing**
 
-    ---
+[Get Started](getting-started/installation.md){ .md-button .md-button--primary }
+[View on GitHub](https://github.com/johnny555/sim_harness){ .md-button }
 
-    Install with pip and start writing tests in minutes.
-
-    [:octicons-arrow-right-24: Getting Started](getting-started/installation.md)
-
--   :material-test-tube:{ .lg .middle } __pytest Integration__
-
-    ---
-
-    Uses familiar pytest patterns. No new test runner to learn.
-
-    [:octicons-arrow-right-24: Writing Tests](guide/writing-tests.md)
-
--   :material-robot:{ .lg .middle } __Simulation Control__
-
-    ---
-
-    Automatically start and stop Gazebo simulations for your tests.
-
-    [:octicons-arrow-right-24: Simulation Control](guide/simulation-control.md)
-
--   :material-check-all:{ .lg .middle } __Requirement Tracing__
-
-    ---
-
-    Map tests to requirements and generate compliance reports.
-
-    [:octicons-arrow-right-24: Requirements](guide/requirements.md)
-
-</div>
+---
 
 ## What is sim_harness?
 
