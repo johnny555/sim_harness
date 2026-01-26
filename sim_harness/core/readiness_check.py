@@ -271,8 +271,11 @@ class ReadinessCheck:
         """
         Add a service availability check.
 
+        Checks whether the specified service appears in the node's
+        service list within the timeout period.
+
         Args:
-            service_name: Name of the service
+            service_name: Name of the service (can be full path or just name)
             timeout_sec: Timeout for this check
             required: Whether this check must pass
             description: Human-readable description
@@ -283,26 +286,14 @@ class ReadinessCheck:
         timeout = timeout_sec or self.default_timeout
 
         def check_fn() -> bool:
-            from rclpy.client import Client
-            # Create a generic client just to check availability
-            client = self.node.create_client(type(None), service_name)
-            try:
-                return client.wait_for_service(timeout_sec=timeout)
-            except Exception:
-                # If we can't create client, check service list
-                start = time.monotonic()
-                while time.monotonic() - start < timeout:
-                    services = self.node.get_service_names_and_types()
-                    for name, _ in services:
-                        if name == service_name or name.endswith('/' + service_name):
-                            return True
-                    self._executor.spin_once(timeout_sec=0.1)
-                return False
-            finally:
-                try:
-                    self.node.destroy_client(client)
-                except Exception:
-                    pass
+            start = time.monotonic()
+            while time.monotonic() - start < timeout:
+                services = self.node.get_service_names_and_types()
+                for name, _ in services:
+                    if name == service_name or name.endswith('/' + service_name):
+                        return True
+                self._executor.spin_once(timeout_sec=0.1)
+            return False
 
         self._checks.append(CheckItem(
             name=f"service:{service_name}",

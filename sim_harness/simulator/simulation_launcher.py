@@ -120,10 +120,17 @@ class SimulationLauncher:
         """
         Wait until the simulation is ready.
 
-        Checks for Gazebo processes and waits for initialization.
+        Checks for Gazebo processes and waits for initialization. After
+        Gazebo is detected, an additional delay is applied based on
+        the launch config's gazebo_startup_delay_sec setting to allow
+        for full initialization.
+
+        Note:
+            Total wait time may exceed timeout_sec due to the additional
+            startup delay applied after Gazebo processes are detected.
 
         Args:
-            timeout_sec: Maximum time to wait
+            timeout_sec: Maximum time to wait for Gazebo processes
 
         Returns:
             True if ready, False on timeout

@@ -477,26 +477,29 @@ def assert_vehicle_orientation(
 
     odom_sub = node.create_subscription(Odometry, odom_topic, odom_callback, qos)
 
+    result = False
     try:
         start_time = time.monotonic()
         while current_yaw is None and time.monotonic() - start_time < timeout_sec:
             executor.spin_once(timeout_sec=0.01)
 
         if current_yaw is None:
-            return False
+            result = False
+        else:
+            # Normalize angle difference to [-pi, pi]
+            diff = current_yaw - expected_yaw
+            while diff > math.pi:
+                diff -= 2 * math.pi
+            while diff < -math.pi:
+                diff += 2 * math.pi
 
-        # Normalize angle difference to [-pi, pi]
-        diff = current_yaw - expected_yaw
-        while diff > math.pi:
-            diff -= 2 * math.pi
-        while diff < -math.pi:
-            diff += 2 * math.pi
-
-        return abs(diff) <= tolerance_rad
+            result = abs(diff) <= tolerance_rad
 
     finally:
         node.destroy_subscription(odom_sub)
         executor.remove_node(node)
+
+    return result
 
 
 def assert_vehicle_moved_with_ground_truth(

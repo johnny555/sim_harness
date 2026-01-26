@@ -172,11 +172,13 @@ class GazeboBackend(SimulatorInterface):
         """
         Check if a specific Gazebo topic is available.
 
+        Performs an exact match against the list of available topics.
+
         Args:
-            topic: Topic name
+            topic: Topic name (exact match required)
 
         Returns:
-            True if topic exists
+            True if topic exists in the topic list
         """
         try:
             result = subprocess.run(
@@ -185,7 +187,9 @@ class GazeboBackend(SimulatorInterface):
                 text=True,
                 timeout=5
             )
-            return topic in result.stdout
+            # Exact line match to avoid false positives from substring matching
+            available_topics = result.stdout.strip().split('\n')
+            return topic in available_topics
         except Exception:
             return False
 

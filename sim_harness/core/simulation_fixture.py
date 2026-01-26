@@ -150,14 +150,11 @@ class SimulationTestFixture(SimTestFixture):
         Override setup_ros to depend on setup_simulation.
 
         This ensures simulation is started before ROS node is created.
+        The setup_simulation parameter creates a pytest fixture dependency,
+        guaranteeing the simulation fixture runs first.
         """
-        # Call parent's setup logic
-        self._setup_test()
-        self.on_setup()  # Hook for subclass setup
-        yield
-        # Teardown
-        self.on_teardown()  # Hook for subclass teardown
-        self._teardown_test()
+        # Delegate to parent's setup/teardown logic
+        yield from super().setup_ros()
 
     @property
     def simulation_manager(self) -> SimulationManager:

@@ -2,7 +2,34 @@ Command Line Interface
 ======================
 
 sim_harness provides a ``ros2 test`` CLI command for discovering and running
-simulation tests. This integrates with the standard ros2 CLI tool.
+tests. This integrates with the standard ros2 CLI tool and supports both
+Python launch tests and C++ GTest/rtest unit tests.
+
+Test Types
+----------
+
+The CLI supports multiple test types:
+
+.. list-table::
+   :widths: 20 30 50
+   :header-rows: 1
+
+   * - Type
+     - Badge
+     - Description
+   * - Launch Test
+     - ``[launch]``
+     - Python launch_testing tests (integration/simulation tests)
+   * - GTest
+     - ``[gtest]``
+     - C++ GTest or rtest unit tests
+
+**Launch tests** are Python files containing a ``generate_test_description()``
+function. These typically involve simulation, ROS 2 node startup, and
+integration testing.
+
+**GTest/rtest tests** are C++ executables built with Google Test or rtest.
+These are fast unit tests that don't require simulation infrastructure.
 
 Overview
 --------
@@ -18,7 +45,7 @@ After building and sourcing the workspace, the following commands are available:
 ros2 test list
 --------------
 
-Discover and list all launch tests in the workspace.
+Discover and list all tests in the workspace (both launch tests and GTest/rtest).
 
 **Usage:**
 
@@ -44,6 +71,12 @@ Discover and list all launch tests in the workspace.
      - Workspace root directory
    * - ``--json``
      - Output in JSON format
+   * - ``--unit``
+     - List only unit tests (C++ GTest/rtest)
+   * - ``--integration``
+     - List only integration tests (Python launch tests)
+   * - ``--type TYPE``
+     - Filter by test type: ``launch``, ``gtest``, or ``all`` (default: ``all``)
    * - ``--no-color``
      - Disable colored output
 
@@ -51,8 +84,14 @@ Discover and list all launch tests in the workspace.
 
 .. code-block:: bash
 
-   # List all tests
+   # List all tests (launch + gtest)
    ros2 test list
+
+   # List only C++ unit tests
+   ros2 test list --unit
+
+   # List only Python launch tests
+   ros2 test list --integration
 
    # List tests from a specific package
    ros2 test list -p my_robot_tests
@@ -70,21 +109,24 @@ Discover and list all launch tests in the workspace.
 
 .. code-block:: text
 
-   Found 5 launch test(s):
+   Found 8 test(s):
 
    [my_robot_tests]
-     test_navigation - Navigation stack integration test
-     test_sensors - Sensor validation test
+     [launch] test_navigation - Navigation stack integration test
+     [launch] test_sensors - Sensor validation test
+     [gtest] test_kinematics - C++ test with 35 test case(s)
+     [gtest] test_planner - C++ test with 15 test case(s)
 
    [my_robot_gazebo]
-     test_physics - Physics simulation validation
-     test_world - World loading test
-     test_spawn - Robot spawn test
+     [launch] test_physics - Physics simulation validation
+     [launch] test_world - World loading test
+     [gtest] test_collision_checker - C++ test with 8 test case(s)
 
 ros2 test run
 -------------
 
-Run launch tests with proper isolation and Gazebo cleanup.
+Run tests with proper isolation and Gazebo cleanup. Supports both Python launch
+tests and C++ GTest/rtest unit tests.
 
 **Usage:**
 
@@ -135,6 +177,12 @@ Run launch tests with proper isolation and Gazebo cleanup.
      - List tests that would be run without executing
    * - ``--junit-xml FILE``
      - Path for combined JUnit XML output
+   * - ``--unit``
+     - Run only unit tests (C++ GTest/rtest)
+   * - ``--integration``
+     - Run only integration tests (Python launch tests)
+   * - ``--type TYPE``
+     - Filter by test type: ``launch``, ``gtest``, or ``all`` (default: ``all``)
    * - ``--no-color``
      - Disable colored output
 
@@ -142,14 +190,23 @@ Run launch tests with proper isolation and Gazebo cleanup.
 
 .. code-block:: bash
 
-   # Run all tests
+   # Run all tests (launch + gtest)
    ros2 test run
 
-   # Run a specific test
-   ros2 test run test_navigation
+   # Run only C++ unit tests (fast feedback)
+   ros2 test run --unit
+
+   # Run only integration/simulation tests
+   ros2 test run --integration
+
+   # Run a specific test (works for both types)
+   ros2 test run test_kinematics_unit
 
    # Run tests from a package
    ros2 test run -p my_robot_tests
+
+   # Run unit tests from a specific package
+   ros2 test run --unit -p trailer_nav2
 
    # Run with verbose output and stop on first failure
    ros2 test run -v -x
@@ -361,3 +418,92 @@ Comparison with colcon test
 
 The ``ros2 test`` command is designed specifically for simulation tests
 and provides better isolation and cleanup than generic test runners.
+
+C++ Unit Tests (GTest/rtest)
+----------------------------
+
+The CLI automatically discovers and runs C++ unit tests built with Google Test
+or rtest. These tests are found by scanning the ``build/`` and ``install/``
+directories for executable files matching test naming patterns.
+
+**Discovery:**
+
+C++ tests are identified by:
+
+- Executable name matching patterns: ``test_*``, ``*_test``, ``*_gtest``, ``*_rtest``
+- Ability to respond to ``--gtest_list_tests`` flag
+- Located in ``build/<package>/`` or ``install/lib/<package>/``
+
+**Execution:**
+
+GTest/rtest tests are executed with:
+
+.. code-block:: bash
+
+   <test_binary> --gtest_output=xml:<output_file> --gtest_color=yes
+
+The test runner:
+
+- Sets appropriate ``ROS_DOMAIN_ID`` for isolation
+- Captures stdout/stderr
+- Generates JUnit XML output compatible with CI systems
+- Reports pass/fail status based on GTest return code
+
+**Recommended Workflow:**
+
+For fast feedback during development:
+
+.. code-block:: bash
+
+   # 1. Run fast unit tests first
+   ros2 test run --unit -x
+
+   # 2. If unit tests pass, run integration tests
+   ros2 test run --integration
+
+   # 3. Or run everything
+   ros2 test run
+
+**Writing rtest Tests:**
+
+rtest tests are C++ unit tests that use the rtest framework (a GTest wrapper
+for ROS 2). They are compiled as standard GTest executables and can be run
+with the same ``--unit`` flag:
+
+.. code-block:: cpp
+
+   #include <rtest/rtest.hpp>
+
+   TEST(MyTest, BasicTest) {
+       EXPECT_EQ(1 + 1, 2);
+   }
+
+   int main(int argc, char** argv) {
+       testing::InitGoogleTest(&argc, argv);
+       return RUN_ALL_TESTS();
+   }
+
+The test discovery automatically identifies rtest binaries by their naming
+convention (``*_rtest``) and adds appropriate markers.
+
+**Verbose Output for GTest:**
+
+When running with ``-v``, you'll see full GTest output including individual
+test case results:
+
+.. code-block:: text
+
+   ============================================================
+   Running: test_kinematics_unit [gtest]
+   Path: /home/user/ros2_ws/build/trailer_nav2/test_kinematics_unit
+   Domain ID: 142
+   Command: /home/user/ros2_ws/build/trailer_nav2/test_kinematics_unit --gtest_output=xml:...
+   ============================================================
+
+   [==========] Running 35 tests from 1 test suite.
+   [----------] 35 tests from KinematicsTest
+   [ RUN      ] KinematicsTest.NormalizeAngle_Zero
+   [       OK ] KinematicsTest.NormalizeAngle_Zero (0 ms)
+   ...
+   [==========] 35 tests from 1 test suite ran. (0 ms total)
+   [  PASSED  ] 35 tests.

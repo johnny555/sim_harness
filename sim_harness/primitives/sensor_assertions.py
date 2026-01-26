@@ -42,6 +42,7 @@ class SensorDataResult:
 def assert_sensor_publishing(
     node: Node,
     topic: str,
+    msg_type: type,
     expected_rate_hz: float,
     tolerance_percent: float = 10.0,
     sample_duration_sec: float = 5.0
@@ -49,11 +50,13 @@ def assert_sensor_publishing(
     """
     Assert that a sensor is publishing at the expected rate.
 
-    Uses a generic subscription to count messages and calculate rate.
+    Subscribes to the topic with the specified message type to count
+    messages and calculate the publish rate.
 
     Args:
         node: ROS 2 node
         topic: Topic to monitor
+        msg_type: Message type class for the topic (e.g., LaserScan, Imu)
         expected_rate_hz: Expected publish rate
         tolerance_percent: Acceptable deviation (percent)
         sample_duration_sec: How long to sample
@@ -70,17 +73,15 @@ def assert_sensor_publishing(
         nonlocal message_count
         message_count += 1
 
-    # Create generic subscription
+    # Create subscription with specified message type
     qos = QoSProfile(
         depth=100,
         reliability=ReliabilityPolicy.BEST_EFFORT,
         durability=DurabilityPolicy.VOLATILE
     )
 
-    # Use raw message type for generic counting
-    from rclpy.serialization import deserialize_message
     sub = node.create_subscription(
-        LaserScan,  # Will be overridden by actual topic type
+        msg_type,
         topic,
         callback,
         qos

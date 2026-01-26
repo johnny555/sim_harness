@@ -194,6 +194,7 @@ class SimTestFixture(RequirementValidator):
         Create a message collector for a topic.
 
         The collector is stored internally and managed by the fixture.
+        It will be automatically destroyed during test teardown.
 
         Args:
             topic: Topic to subscribe to
@@ -202,7 +203,7 @@ class SimTestFixture(RequirementValidator):
             **kwargs: Additional arguments for MessageCollector
 
         Returns:
-            Message collector instance
+            MessageCollector[MsgT]: A collector typed to the message type provided
         """
         collector = MessageCollector(self._node, topic, msg_type, **kwargs)
         storage_key = key if key else topic
@@ -286,12 +287,25 @@ def ros_node():
 @pytest.fixture
 def ros_executor(ros_node):
     """
-    Pytest fixture providing a ROS 2 executor with node.
+    Pytest fixture providing a ROS 2 executor with node already added.
+
+    The executor has ros_node added to it and will be cleaned up automatically.
 
     Usage:
         def test_something(ros_executor, ros_node):
+            from std_msgs.msg import String
+            from sim_harness.core.message_collector import MessageCollector
+            from sim_harness.core.spin_helpers import spin_for_duration
+
             collector = MessageCollector(ros_node, '/topic', String)
             spin_for_duration(ros_executor, 1.0)
+            assert collector.count() > 0
+
+    Args:
+        ros_node: The ros_node fixture (automatically injected by pytest)
+
+    Yields:
+        SingleThreadedExecutor with ros_node added
     """
     executor = SingleThreadedExecutor()
     executor.add_node(ros_node)

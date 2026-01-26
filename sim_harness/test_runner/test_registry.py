@@ -27,7 +27,19 @@ class TestType(Enum):
 
 @dataclass
 class TestInfo:
-    """Information about a discovered test."""
+    """
+    Information about a discovered test.
+
+    Attributes:
+        name: Test name (typically the file stem)
+        path: Path to the test file
+        package: ROS 2 package containing the test (from package.xml)
+        description: First line of the test file's docstring
+        markers: List of pytest marker names extracted from decorators
+                 (e.g., ['slow', 'integration'] from @pytest.mark.slow)
+        timeout: Test timeout in seconds
+        test_type: Type of test (LAUNCH_TEST, GTEST, or PYTEST)
+    """
 
     name: str
     path: Path

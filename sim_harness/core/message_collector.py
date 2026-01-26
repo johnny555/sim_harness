@@ -150,7 +150,12 @@ class MessageCollector(Generic[MsgT]):
         return self._msg_type
 
     def destroy(self) -> None:
-        """Destroy the subscription."""
+        """
+        Destroy the subscription and release resources.
+
+        Safe to call multiple times; subsequent calls are no-ops.
+        Does not clear collected messages - call clear() first if needed.
+        """
         if self._subscription is not None:
             self._node.destroy_subscription(self._subscription)
             self._subscription = None
