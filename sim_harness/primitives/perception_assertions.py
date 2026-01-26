@@ -70,7 +70,8 @@ def assert_object_detected(
     Returns:
         DetectionResult with detection status and details
 
-    Example:
+    Example::
+
         expected = Point(x=5.0, y=2.0, z=0.0)
         result = assert_object_detected(
             node,
@@ -179,7 +180,8 @@ def assert_object_detected_by_class(
     Returns:
         DetectionResult with detection status and details
 
-    Example:
+    Example::
+
         result = assert_object_detected_by_class(
             node,
             '/yolo/detections',
@@ -281,7 +283,8 @@ def assert_min_objects_detected(
     Returns:
         DetectionResult with detection status and details
 
-    Example:
+    Example::
+
         result = assert_min_objects_detected(
             node,
             '/obstacles',
@@ -363,7 +366,8 @@ def assert_region_clear(
     Returns:
         True if no objects detected in region, False otherwise
 
-    Example:
+    Example::
+
         # Check that safety zone around robot is clear
         robot_pos = Point(x=0.0, y=0.0, z=0.0)
         is_clear = assert_region_clear(

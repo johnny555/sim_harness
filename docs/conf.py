@@ -9,7 +9,7 @@ import sys
 # -- Path setup --------------------------------------------------------------
 
 # Add the package's source directory to sys.path for autodoc
-sys.path.insert(0, os.path.abspath('../sim_harness'))
+sys.path.insert(0, os.path.abspath('..'))
 
 # -- Project information -----------------------------------------------------
 
@@ -46,6 +46,10 @@ autodoc_mock_imports = [
     'rclpy',
     'rclpy.node',
     'rclpy.action',
+    'rclpy.time',
+    'rclpy.executors',
+    'rclpy.qos',
+    'rclpy.serialization',
     'std_msgs',
     'geometry_msgs',
     'sensor_msgs',
@@ -57,6 +61,10 @@ autodoc_mock_imports = [
     'launch',
     'launch_ros',
     'action_msgs',
+    'lifecycle_msgs',
+    'controller_manager_msgs',
+    'rcl_interfaces',
+    'builtin_interfaces',
     'pytest',
 ]
 
