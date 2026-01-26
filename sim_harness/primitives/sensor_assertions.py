@@ -42,8 +42,8 @@ class SensorDataResult:
 def assert_sensor_publishing(
     node: Node,
     topic: str,
-    msg_type: type,
     expected_rate_hz: float,
+    msg_type: type = LaserScan,
     tolerance_percent: float = 10.0,
     sample_duration_sec: float = 5.0
 ) -> SensorDataResult:
@@ -56,8 +56,8 @@ def assert_sensor_publishing(
     Args:
         node: ROS 2 node
         topic: Topic to monitor
-        msg_type: Message type class for the topic (e.g., LaserScan, Imu)
         expected_rate_hz: Expected publish rate
+        msg_type: Message type class for the topic (default: LaserScan)
         tolerance_percent: Acceptable deviation (percent)
         sample_duration_sec: How long to sample
 
