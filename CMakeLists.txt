@@ -82,6 +82,11 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# Note: setup.cfg contains entry points for ros2cli and is automatically
+# processed by setuptools when ament_python_install_package builds the
+# Python package. The ros2 test command and its verbs will be registered
+# with ros2cli after building and sourcing the workspace.
+
 # =============================================================================
 # Install
 # =============================================================================

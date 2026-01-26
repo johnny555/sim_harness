@@ -1,7 +1,7 @@
 # Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test runner launch file for C++ GTest binaries.
+"""GTest runner launch file for C++ test binaries.
 
 This launch file runs a C++ test binary with proper ROS 2 isolation,
 without launching a simulator. Useful for:
@@ -9,8 +9,11 @@ without launching a simulator. Useful for:
 - Tests using recorded data (rosbag replay)
 - Tests with mock publishers
 
+Note: This file is named 'gtest_runner' (not 'test_runner') to avoid
+being picked up by test discovery, since it requires arguments.
+
 Usage:
-    ros2 launch sim_test_utils test_runner.launch.py \
+    ros2 launch sim_harness gtest_runner.launch.py \
         package:=my_package \
         test_binary:=my_test \
         domain_id:=42

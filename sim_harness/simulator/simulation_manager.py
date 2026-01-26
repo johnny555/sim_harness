@@ -98,12 +98,14 @@ class SimulationManager:
     Singleton manager for simulation lifecycle.
 
     Coordinates Gazebo simulation across all tests, ensuring:
+
     - Only one simulation runs at a time
     - Simulation is reused when configs are compatible
     - Simulation is restarted when configs differ substantially
     - Proper cleanup on exit
 
-    Usage:
+    Example::
+
         manager = SimulationManager.get_instance()
 
         # Request a simulation - starts or reuses existing

@@ -18,7 +18,8 @@ from enum import Enum
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
-from sim_harness.test_runner.test_registry import TestRegistry, TestInfo
+from sim_harness.test_runner.test_registry import TestRegistry, TestInfo, TestType
+from sim_harness.test_runner.executors import get_executor
 
 
 class TestStatus(Enum):
@@ -117,7 +118,7 @@ class TestRunner:
         Args:
             test: TestInfo for the test to run.
             timeout: Timeout in seconds (overrides default).
-            extra_args: Additional arguments to pass to launch_test.
+            extra_args: Additional arguments to pass to test command.
 
         Returns:
             TestResult with execution details.
@@ -126,26 +127,27 @@ class TestRunner:
         domain_id = self._get_domain_id()
         env = self._build_env(domain_id)
 
+        # Get the appropriate executor for this test type
+        executor = get_executor(test)
+
+        # Add executor-specific environment variables
+        env.update(executor.get_extra_env(test))
+
         # Ensure output directory exists
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Build command
-        cmd = [
-            sys.executable, '-m', 'launch_testing.launch_test',
-            str(test.path),
-        ]
-
-        # Add output file
-        result_file = self.output_dir / f"{test.name}_results.xml"
-        cmd.extend(['--junit-xml', str(result_file)])
+        # Build command using executor
+        result_file = self.output_dir / executor.get_output_filename(test)
+        cmd = executor.build_command(test, result_file)
 
         # Add extra args
         if extra_args:
             cmd.extend(extra_args)
 
         if self.verbose:
+            test_type = test.test_type.name.lower() if test.test_type else "unknown"
             print(f"\n{'='*60}")
-            print(f"Running: {test.name}")
+            print(f"Running: {test.name} [{test_type}]")
             print(f"Path: {test.path}")
             print(f"Domain ID: {domain_id}")
             print(f"Command: {' '.join(cmd)}")

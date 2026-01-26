@@ -21,6 +21,13 @@ from sim_harness.simulator.simulation_manager import (
     SimulationRequest,
     get_simulation_manager,
 )
+from sim_harness.simulator.gazebo_ground_truth import (
+    GazeboGroundTruth,
+    Pose3D,
+    GroundTruthResult,
+    get_model_pose_once,
+    GZ_TRANSPORT_AVAILABLE,
+)
 
 __all__ = [
     'SimulatorType',
@@ -33,4 +40,10 @@ __all__ = [
     'SimulationManager',
     'SimulationRequest',
     'get_simulation_manager',
+    # Ground truth
+    'GazeboGroundTruth',
+    'Pose3D',
+    'GroundTruthResult',
+    'get_model_pose_once',
+    'GZ_TRANSPORT_AVAILABLE',
 ]

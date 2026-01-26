@@ -11,10 +11,12 @@ What is sim_harness?
 **sim_harness** is a testing framework designed for ROS 2 robotics applications
 that run in simulation. It provides:
 
+- **CLI Integration** - ``ros2 test`` command for test discovery and execution
 - **Test Fixtures** - Base classes that handle ROS 2 node lifecycle
 - **Message Collectors** - Easy subscription and message buffering
 - **Simulation Control** - Automatic Gazebo lifecycle management
 - **Assertion Primitives** - Pre-built checks for sensors, navigation, and more
+- **Readiness Checks** - Configurable startup validation for real or simulated robots
 - **Requirement Validation** - Map tests to requirements for traceability
 
 Quick Example
@@ -129,11 +131,13 @@ sim_harness is released under the Apache 2.0 License.
    :maxdepth: 2
    :caption: User Guide
 
+   guide/cli
    guide/writing_tests
    guide/fixtures
    guide/message_collection
    guide/simulation_control
    guide/assertions
+   guide/readiness_check
    guide/requirements
 
 .. toctree::

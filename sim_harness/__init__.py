@@ -79,6 +79,7 @@ from sim_harness.primitives.vehicle_assertions import (
     MovementResult,
     VelocityResult,
     assert_vehicle_moved,
+    assert_vehicle_moved_with_ground_truth,
     assert_vehicle_stationary,
     assert_vehicle_velocity,
     assert_vehicle_in_region,
@@ -134,6 +135,15 @@ from sim_harness.primitives.perception_assertions import (
     assert_region_clear,
 )
 
+from sim_harness.core.readiness_check import (
+    ReadinessCheck,
+    CheckResult,
+    CheckItemResult,
+    CheckStatus,
+    CheckCategory,
+    create_standard_check,
+)
+
 # Test runner (lazy import to avoid circular imports)
 def get_test_runner():
     """Get the TestRunner class for running launch tests."""
@@ -186,6 +196,7 @@ __all__ = [
     'MovementResult',
     'VelocityResult',
     'assert_vehicle_moved',
+    'assert_vehicle_moved_with_ground_truth',
     'assert_vehicle_stationary',
     'assert_vehicle_velocity',
     'assert_vehicle_in_region',
@@ -229,6 +240,13 @@ __all__ = [
     'assert_object_detected_by_class',
     'assert_min_objects_detected',
     'assert_region_clear',
+    # Readiness checks
+    'ReadinessCheck',
+    'CheckResult',
+    'CheckItemResult',
+    'CheckStatus',
+    'CheckCategory',
+    'create_standard_check',
     # Test runner
     'get_test_runner',
     'get_test_registry',

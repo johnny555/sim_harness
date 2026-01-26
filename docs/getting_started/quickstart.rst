@@ -53,18 +53,32 @@ sim_harness can automatically start and stop the simulation:
 Using the CLI
 -------------
 
-sim_harness provides CLI tools for test discovery and execution:
+sim_harness provides a ``ros2 test`` command for test discovery and execution:
 
 .. code-block:: bash
 
    # List all tests in your workspace
-   ros2 run sim_harness list_tests
+   ros2 test list
+
+   # List tests with details
+   ros2 test list -v
+
+   # Run all tests
+   ros2 test run
 
    # Run a specific test
-   ros2 run sim_harness run_test test_turtlebot3_integration
+   ros2 test run test_turtlebot3_integration
 
-   # Run all tests matching a pattern
-   ros2 run sim_harness run_tests --pattern "test_basic*"
+   # Run tests matching a pattern
+   ros2 test run --pattern "test_basic*"
+
+   # Run tests from a specific package
+   ros2 test run -p my_robot_tests
+
+   # Rerun failed tests
+   ros2 test failed
+
+See :doc:`../guide/cli` for the complete CLI reference.
 
 What's Next?
 ------------

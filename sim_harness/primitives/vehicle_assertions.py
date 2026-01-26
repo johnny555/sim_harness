@@ -5,11 +5,12 @@
 Vehicle motion and state validation assertions.
 
 Provides functions to validate robot movement and state.
+Supports both odometry-based and ground-truth-based validation.
 """
 
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 import rclpy
@@ -41,6 +42,19 @@ class MovementResult:
 
     details: str
     """Human-readable details."""
+
+    # Ground truth fields (optional)
+    ground_truth_distance: Optional[float] = None
+    """Distance moved according to Gazebo ground truth."""
+
+    ground_truth_start: Optional[Tuple[float, float, float]] = None
+    """Starting position from ground truth."""
+
+    ground_truth_end: Optional[Tuple[float, float, float]] = None
+    """Ending position from ground truth."""
+
+    odom_error: Optional[float] = None
+    """Position error between odom and ground truth (meters)."""
 
 
 @dataclass
@@ -483,3 +497,208 @@ def assert_vehicle_orientation(
     finally:
         node.destroy_subscription(odom_sub)
         executor.remove_node(node)
+
+
+def assert_vehicle_moved_with_ground_truth(
+    node: Node,
+    vehicle_id: str,
+    gazebo_model_name: str,
+    min_distance: float,
+    velocity: float = 1.0,
+    timeout_sec: float = 10.0,
+    odom_topic: Optional[str] = None,
+    cmd_vel_topic: Optional[str] = None,
+    use_twist_stamped: bool = True,
+    world_name: str = "empty",
+    odom_tolerance: float = 0.5
+) -> MovementResult:
+    """
+    Assert vehicle movement with Gazebo ground truth validation.
+
+    Like assert_vehicle_moved, but also verifies the movement against
+    Gazebo's ground truth pose. This allows you to:
+    1. Confirm the robot actually moved in the simulation
+    2. Validate that odometry is accurately reflecting the movement
+
+    Args:
+        node: ROS 2 node for subscriptions/publishers
+        vehicle_id: Vehicle namespace (e.g., "robot_01")
+        gazebo_model_name: Name of the model in Gazebo (may differ from vehicle_id)
+        min_distance: Minimum distance to move (meters)
+        velocity: Forward velocity to command (m/s)
+        timeout_sec: Maximum time to wait
+        odom_topic: Custom odometry topic (default: /{vehicle_id}/odom)
+        cmd_vel_topic: Custom cmd_vel topic (default: /{vehicle_id}/cmd_vel)
+        use_twist_stamped: Use TwistStamped instead of Twist
+        world_name: Gazebo world name (for ground truth topic)
+        odom_tolerance: Maximum acceptable odom-to-ground-truth error (meters)
+
+    Returns:
+        MovementResult with success status, odom data, and ground truth comparison
+
+    Example:
+        result = assert_vehicle_moved_with_ground_truth(
+            node, "turtlebot3", "turtlebot3_waffle",
+            min_distance=1.0, world_name="turtlebot3_world"
+        )
+        assert result.success, f"Robot didn't move: {result.details}"
+        assert result.odom_error < 0.1, f"Odom drift: {result.odom_error}m"
+    """
+    # Import here to avoid circular imports and handle missing gz-transport
+    try:
+        from sim_harness.simulator.gazebo_ground_truth import (
+            GazeboGroundTruth,
+            GZ_TRANSPORT_AVAILABLE
+        )
+    except ImportError:
+        GZ_TRANSPORT_AVAILABLE = False
+
+    if not GZ_TRANSPORT_AVAILABLE:
+        # Fall back to regular assertion without ground truth
+        result = assert_vehicle_moved(
+            node, vehicle_id, min_distance, velocity, timeout_sec,
+            odom_topic, cmd_vel_topic, use_twist_stamped
+        )
+        result.details += " (ground truth unavailable - gz-transport not installed)"
+        return result
+
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+
+    # Default topic names
+    if odom_topic is None:
+        odom_topic = f"/{vehicle_id}/odom"
+    if cmd_vel_topic is None:
+        cmd_vel_topic = f"/{vehicle_id}/cmd_vel"
+
+    latest_odom: Optional[Odometry] = None
+
+    def odom_callback(msg: Odometry):
+        nonlocal latest_odom
+        latest_odom = msg
+
+    qos = QoSProfile(
+        depth=10,
+        reliability=ReliabilityPolicy.BEST_EFFORT,
+        durability=DurabilityPolicy.VOLATILE
+    )
+
+    odom_sub = node.create_subscription(Odometry, odom_topic, odom_callback, qos)
+
+    # Create velocity publisher
+    if use_twist_stamped:
+        cmd_pub = node.create_publisher(TwistStamped, cmd_vel_topic, 10)
+    else:
+        cmd_pub = node.create_publisher(Twist, cmd_vel_topic, 10)
+
+    result = MovementResult(
+        success=False,
+        distance_moved=0.0,
+        start_position=(0.0, 0.0, 0.0),
+        end_position=(0.0, 0.0, 0.0),
+        details=""
+    )
+
+    try:
+        # Connect to Gazebo ground truth
+        with GazeboGroundTruth(world_name=world_name) as gz:
+            # Get initial ground truth pose
+            gt_start = gz.get_model_pose(gazebo_model_name)
+            if gt_start is None:
+                result.details = f"Model '{gazebo_model_name}' not found in Gazebo"
+                return result
+
+            result.ground_truth_start = gt_start.position
+
+            # Wait for initial odometry
+            start_wait = time.monotonic()
+            while latest_odom is None and time.monotonic() - start_wait < 5.0:
+                executor.spin_once(timeout_sec=0.01)
+
+            if latest_odom is None:
+                result.details = f"No odometry received on {odom_topic}"
+                return result
+
+            start_pos = (
+                latest_odom.pose.pose.position.x,
+                latest_odom.pose.pose.position.y,
+                latest_odom.pose.pose.position.z
+            )
+            result.start_position = start_pos
+
+            # Send velocity commands
+            start_time = time.monotonic()
+            while time.monotonic() - start_time < timeout_sec:
+                # Create and publish command
+                if use_twist_stamped:
+                    cmd = TwistStamped()
+                    cmd.header.frame_id = "base_link"
+                    cmd.header.stamp = node.get_clock().now().to_msg()
+                    cmd.twist.linear.x = velocity
+                    cmd.twist.angular.z = 0.0
+                else:
+                    cmd = Twist()
+                    cmd.linear.x = velocity
+                    cmd.angular.z = 0.0
+
+                cmd_pub.publish(cmd)
+                executor.spin_once(timeout_sec=0.05)
+
+                if latest_odom is not None:
+                    end_pos = (
+                        latest_odom.pose.pose.position.x,
+                        latest_odom.pose.pose.position.y,
+                        latest_odom.pose.pose.position.z
+                    )
+                    result.end_position = end_pos
+                    result.distance_moved = _distance_3d(start_pos, end_pos)
+
+                    # Check ground truth
+                    gt_end = gz.get_model_pose(gazebo_model_name)
+                    if gt_end:
+                        result.ground_truth_end = gt_end.position
+                        result.ground_truth_distance = gt_start.distance_to(gt_end)
+
+                        # Check if ground truth shows we've moved enough
+                        if result.ground_truth_distance >= min_distance:
+                            result.success = True
+                            break
+
+            # Stop the vehicle
+            if use_twist_stamped:
+                stop_cmd = TwistStamped()
+                stop_cmd.header.frame_id = "base_link"
+                stop_cmd.header.stamp = node.get_clock().now().to_msg()
+            else:
+                stop_cmd = Twist()
+            cmd_pub.publish(stop_cmd)
+
+            # Final ground truth check
+            gt_final = gz.get_model_pose(gazebo_model_name)
+            if gt_final:
+                result.ground_truth_end = gt_final.position
+                result.ground_truth_distance = gt_start.distance_to(gt_final)
+
+                # Calculate odom error (difference between odom and ground truth)
+                result.odom_error = _distance_3d(result.end_position, gt_final.position)
+
+            # Build details message
+            if result.success:
+                result.details = (
+                    f"Ground truth: moved {result.ground_truth_distance:.2f}m, "
+                    f"Odom: moved {result.distance_moved:.2f}m, "
+                    f"Odom error: {result.odom_error:.3f}m"
+                )
+            else:
+                result.details = (
+                    f"Ground truth: moved {result.ground_truth_distance or 0:.2f}m "
+                    f"(required: {min_distance}m), "
+                    f"Odom: moved {result.distance_moved:.2f}m"
+                )
+
+    finally:
+        node.destroy_subscription(odom_sub)
+        node.destroy_publisher(cmd_pub)
+        executor.remove_node(node)
+
+    return result

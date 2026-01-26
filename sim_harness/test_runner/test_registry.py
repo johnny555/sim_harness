@@ -2,18 +2,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Test registry for discovering launch_testing tests in the workspace.
+Test registry for discovering tests in the workspace.
 
-Scans the workspace src/ directory for Python files containing
-`generate_test_description()` functions, which is the marker for
-launch_testing tests.
+Supports multiple test types:
+- launch_testing: Python files containing `generate_test_description()`
+- GTest/rtest: C++ test executables in build/ and install/ directories
+- pytest: Standard Python pytest tests (future)
 """
 
 import ast
 import os
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from pathlib import Path
 from typing import List, Optional, Dict
+
+
+class TestType(Enum):
+    """Type of test for execution dispatch."""
+    LAUNCH_TEST = auto()  # Python launch_testing
+    GTEST = auto()        # C++ GTest/rtest
+    PYTEST = auto()       # Python pytest (future)
 
 
 @dataclass
@@ -26,10 +35,12 @@ class TestInfo:
     description: str = ""
     markers: List[str] = field(default_factory=list)
     timeout: int = 300  # Default timeout in seconds
+    test_type: TestType = TestType.LAUNCH_TEST
 
     def __str__(self) -> str:
         pkg = f"[{self.package}]" if self.package else ""
-        return f"{pkg} {self.name}: {self.path}"
+        type_str = f"[{self.test_type.name.lower()}]" if self.test_type else ""
+        return f"{type_str}{pkg} {self.name}: {self.path}"
 
     @property
     def short_name(self) -> str:
@@ -38,7 +49,7 @@ class TestInfo:
 
 
 class TestRegistry:
-    """Registry for discovering and managing launch tests."""
+    """Registry for discovering and managing tests of all types."""
 
     # Directories to skip during discovery
     SKIP_DIRS = {
@@ -63,6 +74,7 @@ class TestRegistry:
         """
         self.workspace_root = workspace_root or self._find_workspace_root()
         self.tests: Dict[str, TestInfo] = {}
+        self._cpp_registry = None  # Lazy initialization
 
     def _find_workspace_root(self) -> Path:
         """Find workspace root by looking for src/ directory."""
@@ -79,6 +91,13 @@ class TestRegistry:
 
         # Fallback to current directory
         return cwd
+
+    def _get_cpp_registry(self):
+        """Get the C++ test registry, creating it if needed."""
+        if self._cpp_registry is None:
+            from sim_harness.test_runner.cpp_registry import CppTestRegistry
+            self._cpp_registry = CppTestRegistry(self.workspace_root)
+        return self._cpp_registry
 
     def _should_skip_dir(self, dir_path: Path) -> bool:
         """Check if directory should be skipped."""
@@ -176,17 +195,58 @@ class TestRegistry:
 
     def discover(self,
                  packages: Optional[List[str]] = None,
-                 pattern: Optional[str] = None) -> List[TestInfo]:
-        """Discover all launch tests in the workspace.
+                 pattern: Optional[str] = None,
+                 test_types: Optional[List[TestType]] = None) -> List[TestInfo]:
+        """Discover all tests in the workspace.
+
+        Args:
+            packages: List of package names to search. If None, searches all.
+            pattern: Glob pattern to filter tests (e.g., "test_nav*")
+            test_types: List of test types to discover. If None, discovers all types.
+
+        Returns:
+            List of TestInfo objects for discovered tests.
+        """
+        self.tests.clear()
+        all_tests = []
+
+        # Default to all types if not specified
+        if test_types is None:
+            test_types = [TestType.LAUNCH_TEST, TestType.GTEST]
+
+        # Discover launch tests
+        if TestType.LAUNCH_TEST in test_types:
+            launch_tests = self._discover_launch_tests(packages, pattern)
+            all_tests.extend(launch_tests)
+
+        # Discover C++ tests
+        if TestType.GTEST in test_types:
+            cpp_tests = self._get_cpp_registry().discover(packages)
+            if pattern:
+                cpp_tests = [t for t in cpp_tests if t.path.match(pattern) or
+                           pattern in t.name]
+            all_tests.extend(cpp_tests)
+
+        # Store in registry with unique keys
+        for test in all_tests:
+            key = f"{test.test_type.name}:{test.name}"
+            self.tests[key] = test
+
+        return all_tests
+
+    def _discover_launch_tests(self,
+                               packages: Optional[List[str]] = None,
+                               pattern: Optional[str] = None) -> List[TestInfo]:
+        """Discover launch_testing Python tests.
 
         Args:
             packages: List of package names to search. If None, searches all.
             pattern: Glob pattern to filter tests (e.g., "test_nav*")
 
         Returns:
-            List of TestInfo objects for discovered tests.
+            List of TestInfo objects for discovered launch tests.
         """
-        self.tests.clear()
+        tests = []
         src_dir = self.workspace_root / 'src'
 
         if not src_dir.exists():
@@ -230,11 +290,9 @@ class TestRegistry:
                     if packages and test_info.package not in packages:
                         continue
 
-                    # Use relative path as key
-                    rel_path = file_path.relative_to(self.workspace_root)
-                    self.tests[str(rel_path)] = test_info
+                    tests.append(test_info)
 
-        return list(self.tests.values())
+        return tests
 
     def get_test(self, name_or_path: str) -> Optional[TestInfo]:
         """Get a test by name or path.
@@ -264,20 +322,22 @@ class TestRegistry:
 
     def list_tests(self,
                    packages: Optional[List[str]] = None,
-                   verbose: bool = False) -> str:
+                   verbose: bool = False,
+                   test_types: Optional[List[TestType]] = None) -> str:
         """List all tests in a formatted string.
 
         Args:
             packages: Filter by package names.
             verbose: Include full paths and descriptions.
+            test_types: Filter by test types.
 
         Returns:
             Formatted string listing all tests.
         """
-        tests = self.discover(packages=packages)
+        tests = self.discover(packages=packages, test_types=test_types)
 
         if not tests:
-            return "No launch tests found."
+            return "No tests found."
 
         # Group by package
         by_package: Dict[str, List[TestInfo]] = {}
@@ -287,13 +347,14 @@ class TestRegistry:
                 by_package[pkg] = []
             by_package[pkg].append(test)
 
-        lines = [f"Found {len(tests)} launch test(s):\n"]
+        lines = [f"Found {len(tests)} test(s):\n"]
 
         for pkg in sorted(by_package.keys()):
             lines.append(f"\n[{pkg}]")
             for test in sorted(by_package[pkg], key=lambda t: t.name):
+                type_badge = f"[{test.test_type.name.lower()}] " if test.test_type else ""
                 if verbose:
-                    lines.append(f"  {test.name}")
+                    lines.append(f"  {type_badge}{test.name}")
                     lines.append(f"    Path: {test.path}")
                     if test.description:
                         lines.append(f"    Desc: {test.description}")
@@ -301,23 +362,25 @@ class TestRegistry:
                         lines.append(f"    Markers: {', '.join(test.markers)}")
                 else:
                     desc = f" - {test.description}" if test.description else ""
-                    lines.append(f"  {test.name}{desc}")
+                    lines.append(f"  {type_badge}{test.name}{desc}")
 
         return '\n'.join(lines)
 
 
 def discover_tests(workspace_root: Optional[Path] = None,
                    packages: Optional[List[str]] = None,
-                   pattern: Optional[str] = None) -> List[TestInfo]:
+                   pattern: Optional[str] = None,
+                   test_types: Optional[List[TestType]] = None) -> List[TestInfo]:
     """Convenience function to discover tests.
 
     Args:
         workspace_root: Root of the ROS2 workspace.
         packages: List of package names to search.
         pattern: Glob pattern to filter tests.
+        test_types: List of test types to discover.
 
     Returns:
         List of TestInfo objects.
     """
     registry = TestRegistry(workspace_root)
-    return registry.discover(packages=packages, pattern=pattern)
+    return registry.discover(packages=packages, pattern=pattern, test_types=test_types)
