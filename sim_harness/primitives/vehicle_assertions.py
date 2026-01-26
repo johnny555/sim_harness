@@ -523,6 +523,11 @@ def assert_vehicle_moved_with_ground_truth(
     1. Confirm the robot actually moved in the simulation
     2. Validate that odometry is accurately reflecting the movement
 
+    Note:
+        If gz-transport Python bindings are not installed, this function
+        falls back to assert_vehicle_moved() without ground truth validation.
+        The result.details will indicate "(ground truth unavailable)".
+
     Args:
         node: ROS 2 node for subscriptions/publishers
         vehicle_id: Vehicle namespace (e.g., "robot_01")

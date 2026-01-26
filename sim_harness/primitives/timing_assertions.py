@@ -58,6 +58,10 @@ def assert_publish_rate(
     """
     Assert that a topic publishes at the expected rate.
 
+    Note:
+        This function temporarily adds the node to an internal executor
+        and removes it when done. The node remains valid after the call.
+
     Args:
         node: ROS 2 node
         topic: Topic to monitor
@@ -67,7 +71,12 @@ def assert_publish_rate(
         sample_duration_sec: How long to sample
 
     Returns:
-        TimingResult
+        TimingResult with:
+        - within_bounds: True if measured rate is within tolerance
+        - measured_rate_hz: Actual publish rate observed
+        - min_interval_ms, max_interval_ms, avg_interval_ms: Inter-message
+          intervals (stored in min_latency_ms, max_latency_ms, avg_latency_ms
+          fields for API compatibility)
     """
     executor = SingleThreadedExecutor()
     executor.add_node(node)
@@ -143,7 +152,11 @@ def assert_latency(
     """
     Assert that message latency is within bounds.
 
-    Compares header timestamp to receive time.
+    Compares header timestamp to receive time to measure end-to-end latency.
+
+    Note:
+        This function temporarily adds the node to an internal executor
+        and removes it when done. The node remains valid after the call.
 
     Args:
         node: ROS 2 node
@@ -153,7 +166,15 @@ def assert_latency(
         sample_duration_sec: How long to sample
 
     Returns:
-        TimingResult
+        TimingResult with:
+        - within_bounds: True if max observed latency <= max_latency_ms
+        - measured_rate_hz: Message rate during sampling period
+        - min_latency_ms, max_latency_ms, avg_latency_ms: Latency statistics
+
+    Note:
+        Messages without a header.stamp field are silently skipped. If all
+        messages lack timestamps, returns with details "No messages with
+        timestamps received".
     """
     executor = SingleThreadedExecutor()
     executor.add_node(node)

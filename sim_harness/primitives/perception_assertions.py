@@ -58,6 +58,11 @@ def assert_object_detected(
     This function subscribes to a detection topic and checks if any
     detected objects are within search_radius of the expected position.
 
+    Note:
+        This function temporarily adds the node to an executor and removes
+        it when done. If subscription fails, returns a failed DetectionResult
+        with error details rather than raising an exception.
+
     Args:
         node: ROS 2 node for subscriptions
         detection_topic: Topic publishing detection messages
@@ -68,7 +73,11 @@ def assert_object_detected(
             detection message. If None, tries common message formats.
 
     Returns:
-        DetectionResult with detection status and details
+        DetectionResult with:
+        - detected: True if object found within search_radius
+        - detection_count: Total number of detections received
+        - closest_position: Position of closest detected object
+        - details: Human-readable status message
 
     Example::
 
@@ -168,6 +177,10 @@ def assert_object_detected_by_class(
     """
     Assert that an object of a specific class is detected.
 
+    Note:
+        This function temporarily adds the node to an executor and removes
+        it when done.
+
     Args:
         node: ROS 2 node for subscriptions
         detection_topic: Topic publishing detection messages
@@ -178,7 +191,11 @@ def assert_object_detected_by_class(
             tuples from detection message. If None, tries common formats.
 
     Returns:
-        DetectionResult with detection status and details
+        DetectionResult with:
+        - detected: True if matching class found with sufficient confidence
+        - detection_count: Number of detections matching class AND confidence threshold
+        - closest_position: Position of the first matching detection
+        - details: Human-readable status message
 
     Example::
 
@@ -272,6 +289,10 @@ def assert_min_objects_detected(
     """
     Assert that a minimum number of objects are detected.
 
+    Note:
+        This function temporarily adds the node to an executor and removes
+        it when done.
+
     Args:
         node: ROS 2 node for subscriptions
         detection_topic: Topic publishing detection messages
@@ -281,7 +302,10 @@ def assert_min_objects_detected(
             If None, tries common message formats.
 
     Returns:
-        DetectionResult with detection status and details
+        DetectionResult with:
+        - detected: True if detection_count >= min_count
+        - detection_count: Maximum detection count observed across all messages
+        - details: Human-readable status message
 
     Example::
 
@@ -355,6 +379,11 @@ def assert_region_clear(
     Observes detections for a period and verifies no objects are detected
     within the specified region. Useful for safety zone validation.
 
+    Note:
+        This function temporarily adds the node to an executor and removes
+        it when done. If subscription to the topic fails, returns True
+        (assumes region is clear when unable to observe).
+
     Args:
         node: ROS 2 node for subscriptions
         detection_topic: Topic publishing detection messages
@@ -364,7 +393,7 @@ def assert_region_clear(
         position_extractor: Optional function to extract Point list from message.
 
     Returns:
-        True if no objects detected in region, False otherwise
+        True if no objects detected in region (or subscription failed), False otherwise
 
     Example::
 

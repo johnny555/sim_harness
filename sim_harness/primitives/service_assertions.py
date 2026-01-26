@@ -48,14 +48,19 @@ def assert_service_available(
     """
     Assert that a service is available.
 
+    Creates a temporary node internally for the service client.
+
     Args:
-        node: ROS 2 node
+        node: ROS 2 node (unused, kept for API consistency)
         service_name: Service name
         service_type: Service type class
         timeout_sec: Maximum time to wait
 
     Returns:
-        ServiceResult
+        ServiceResult with:
+        - available: True if service responded within timeout
+        - call_succeeded: Same as available (availability check succeeded)
+        - response_time_ms: Time to discover the service
     """
     temp_node = rclpy.create_node(f"service_checker_{int(time.time() * 1000) % 10000}")
     executor = SingleThreadedExecutor()
@@ -74,6 +79,7 @@ def assert_service_available(
         start_time = time.monotonic()
         result.available = client.wait_for_service(timeout_sec=timeout_sec)
         result.response_time_ms = (time.monotonic() - start_time) * 1000
+        result.call_succeeded = result.available
 
         if result.available:
             result.details = f"Service {service_name} available in {result.response_time_ms:.0f}ms"
@@ -97,14 +103,19 @@ def assert_action_server_available(
     """
     Assert that an action server is available.
 
+    Creates a temporary node internally for the action client.
+
     Args:
-        node: ROS 2 node
+        node: ROS 2 node (unused, kept for API consistency)
         action_name: Action name
         action_type: Action type class
         timeout_sec: Maximum time to wait
 
     Returns:
-        ServiceResult
+        ServiceResult with:
+        - available: True if action server responded within timeout
+        - call_succeeded: Same as available (availability check succeeded)
+        - response_time_ms: Time to discover the action server
     """
     temp_node = rclpy.create_node(f"action_checker_{int(time.time() * 1000) % 10000}")
     executor = SingleThreadedExecutor()
@@ -123,6 +134,7 @@ def assert_action_server_available(
         start_time = time.monotonic()
         result.available = action_client.wait_for_server(timeout_sec=timeout_sec)
         result.response_time_ms = (time.monotonic() - start_time) * 1000
+        result.call_succeeded = result.available
 
         if result.available:
             result.details = f"Action server {action_name} available in {result.response_time_ms:.0f}ms"
@@ -210,17 +222,20 @@ def assert_parameter_exists(
     """
     Assert that a parameter exists on a node.
 
-    Optionally checks if the parameter has an expected value.
+    Optionally checks if the parameter has an expected value. Creates a
+    temporary node internally for the service client.
 
     Args:
-        node: ROS 2 node
+        node: ROS 2 node (unused, kept for API consistency)
         target_node_name: Node that has the parameter
         parameter_name: Parameter name
-        expected_value: Optional expected value
+        expected_value: Optional expected value. Only compared for BOOL,
+            INTEGER, DOUBLE, and STRING types. For array/complex types,
+            returns True if parameter exists (value comparison skipped).
         timeout_sec: Maximum time to wait
 
     Returns:
-        True if parameter exists (and matches value if specified)
+        True if parameter exists (and matches value if specified for simple types)
     """
     temp_node = rclpy.create_node(f"param_checker_{int(time.time() * 1000) % 10000}")
     executor = SingleThreadedExecutor()

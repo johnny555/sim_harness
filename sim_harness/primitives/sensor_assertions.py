@@ -127,19 +127,23 @@ def assert_lidar_valid(
 
     Checks:
     - Messages are being received
-    - Point cloud/scan has minimum number of points
+    - Scan has minimum number of valid points
     - Range values are within bounds (no NaN, within sensor limits)
+
+    Note:
+        This function temporarily adds the node to an internal executor
+        and removes it when done. Currently only supports LaserScan messages.
 
     Args:
         node: ROS 2 node
-        topic: LIDAR topic (supports LaserScan or PointCloud2)
+        topic: LIDAR topic (LaserScan message type)
         min_range: Minimum valid range (meters)
         max_range: Maximum valid range (meters)
-        min_points: Minimum number of points expected
+        min_points: Minimum number of valid (non-NaN, non-inf) points expected
         timeout_sec: Time to wait for data
 
     Returns:
-        SensorDataResult
+        SensorDataResult with validation status and point statistics
     """
     executor = SingleThreadedExecutor()
     executor.add_node(node)

@@ -42,6 +42,7 @@ class SimulationTestFixture(SimTestFixture):
             # Optional settings
             LAUNCH_ARGS = {'use_sim_time': 'true'}
             STARTUP_TIMEOUT = 60.0
+            GAZEBO_STARTUP_DELAY = 5.0  # Extra wait after Gazebo starts
             REQUIRE_SIM = True  # Skip tests if sim can't start
 
             def test_robot_moves(self):
@@ -153,8 +154,12 @@ class SimulationTestFixture(SimTestFixture):
         The setup_simulation parameter creates a pytest fixture dependency,
         guaranteeing the simulation fixture runs first.
         """
-        # Delegate to parent's setup/teardown logic
-        yield from super().setup_ros()
+        # Duplicate parent's setup/teardown logic (can't call fixture directly)
+        self._setup_test()
+        self.on_setup()
+        yield
+        self.on_teardown()
+        self._teardown_test()
 
     @property
     def simulation_manager(self) -> SimulationManager:

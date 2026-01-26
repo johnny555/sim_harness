@@ -59,6 +59,10 @@ def assert_reaches_goal(
 
     Monitors odometry until vehicle reaches goal within tolerance.
 
+    Note:
+        This function temporarily adds the node to an internal executor
+        and removes it when done. The node remains valid after the call.
+
     Args:
         node: ROS 2 node
         goal_pose: Target pose
@@ -67,7 +71,7 @@ def assert_reaches_goal(
         odom_topic: Odometry topic to monitor
 
     Returns:
-        NavigationResult
+        NavigationResult with success status, final distance, and timing
     """
     executor = SingleThreadedExecutor()
     executor.add_node(node)
@@ -136,16 +140,23 @@ def assert_follows_path(
     Assert that the robot follows a path within a corridor.
 
     Verifies the vehicle stays within corridor_width of the expected path.
+    The robot is considered to have reached the goal when it is within
+    corridor_width of the final waypoint.
+
+    Note:
+        This function temporarily adds the node to an internal executor
+        and removes it when done. The node remains valid after the call.
 
     Args:
         node: ROS 2 node
-        path: List of waypoints
-        corridor_width: Maximum deviation from path (meters)
+        path: List of waypoints (must have at least 2)
+        corridor_width: Maximum deviation from path (meters). Also used
+            as the tolerance for reaching the final waypoint.
         timeout_sec: Maximum time to wait
         odom_topic: Odometry topic to monitor
 
     Returns:
-        NavigationResult
+        NavigationResult with success status and maximum deviation observed
     """
     if len(path) < 2:
         return NavigationResult(
@@ -265,16 +276,22 @@ def assert_navigation_action_succeeds(
     """
     Assert that a navigation action succeeds.
 
-    Sends a NavigateToPose action and waits for completion.
+    Sends a NavigateToPose action and waits for completion. Creates a
+    temporary node internally for the action client (does not use the
+    passed node).
 
     Args:
-        node: ROS 2 node
+        node: ROS 2 node (unused, kept for API consistency)
         goal_pose: Target pose
         timeout_sec: Maximum time to wait
         action_name: Action server name
 
     Returns:
-        NavigationResult
+        NavigationResult with:
+        - success: True if action status is SUCCEEDED (status code 4)
+        - final_distance_to_goal: 0.0 on success, inf on failure
+        - time_taken_sec: Time from goal submission to result
+        - details: Status message including failure status code if applicable
     """
     temp_node = rclpy.create_node(f"nav_action_client_{int(time.time() * 1000) % 10000}")
     executor = SingleThreadedExecutor()

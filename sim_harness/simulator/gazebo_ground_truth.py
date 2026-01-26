@@ -258,12 +258,13 @@ class GazeboGroundTruth:
 
         Args:
             model_name: Name of the model in Gazebo
-            timeout_sec: How long to wait for pose (default: self.timeout_sec)
+            timeout_sec: How long to wait for pose. If None, uses self.timeout_sec.
+                Note: A value of 0.0 means no waiting (immediate return if not found).
 
         Returns:
             Pose3D if found, None otherwise
         """
-        timeout = timeout_sec or self.timeout_sec
+        timeout = self.timeout_sec if timeout_sec is None else timeout_sec
         start = time.monotonic()
 
         while time.monotonic() - start < timeout:
@@ -342,12 +343,19 @@ class GazeboGroundTruth:
         Args:
             model_name: Name of the model in Gazebo
             odom_position: Position from odometry (x, y, z)
-            odom_orientation: Quaternion from odometry (x, y, z, w), optional
+            odom_orientation: Quaternion from odometry (x, y, z, w). If provided,
+                yaw is also compared against ground truth. If None, only position
+                is compared.
             position_tolerance: Maximum acceptable position error (meters)
-            yaw_tolerance: Maximum acceptable yaw error (radians)
+            yaw_tolerance: Maximum acceptable yaw error (radians). Only used
+                if odom_orientation is provided.
 
         Returns:
-            GroundTruthResult with comparison details.
+            GroundTruthResult with:
+            - success: True if position error <= position_tolerance AND
+              (if orientation provided) yaw error <= yaw_tolerance
+            - position_error: 3D Euclidean distance between odom and ground truth
+            - orientation_error: Yaw error in radians (0.0 if orientation not provided)
         """
         gt_pose = self.get_model_pose(model_name)
 

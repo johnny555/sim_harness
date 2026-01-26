@@ -126,14 +126,17 @@ def assert_lifecycle_node_state(
     """
     Assert that a lifecycle node is in a specific state.
 
+    Creates a temporary node internally for the service client to avoid
+    executor conflicts with the passed node.
+
     Args:
-        node: ROS 2 node
+        node: ROS 2 node (unused, kept for API consistency)
         lifecycle_node_name: Name of the lifecycle node
         expected_state: Expected state
         timeout_sec: Maximum time to wait
 
     Returns:
-        LifecycleResult
+        LifecycleResult with current state and timing information
     """
     # Create a temporary node for service calls to avoid executor conflicts
     temp_node = rclpy.create_node(f"lifecycle_checker_{int(time.time() * 1000) % 10000}")
@@ -430,19 +433,23 @@ def assert_localization_active(
     node: Node,
     node_name: str = "amcl",
     max_covariance_trace: float = 1.0,
-    timeout_sec: float = 30.0
+    timeout_sec: float = 30.0,
+    pose_topic: str = "/amcl_pose"
 ) -> LocalizationResult:
     """
     Assert that localization (AMCL) is active and converged.
 
+    Creates a temporary node internally to subscribe to the pose topic.
+
     Args:
-        node: ROS 2 node
-        node_name: AMCL node name
+        node: ROS 2 node (unused, kept for API consistency)
+        node_name: AMCL node name for lifecycle state check
         max_covariance_trace: Maximum covariance trace for "converged"
-        timeout_sec: Maximum time to wait
+        timeout_sec: Maximum time to wait for lifecycle state
+        pose_topic: Topic for PoseWithCovarianceStamped messages
 
     Returns:
-        LocalizationResult
+        LocalizationResult with active state, convergence status, and covariance
     """
     from geometry_msgs.msg import PoseWithCovarianceStamped
     from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
@@ -480,7 +487,7 @@ def assert_localization_active(
 
     sub = temp_node.create_subscription(
         PoseWithCovarianceStamped,
-        "/amcl_pose",
+        pose_topic,
         callback,
         qos
     )
