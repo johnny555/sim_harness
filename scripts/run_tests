@@ -1,0 +1,46 @@
+#!/bin/bash
+# Run colcon tests with live output and pytest-style summary
+#
+# Usage (from workspace root):
+#   src/sim_harness/scripts/run_tests
+#   src/sim_harness/scripts/run_tests --packages-select sim_harness
+#   src/sim_harness/scripts/run_tests --packages-select my_pkg --retest-until-fail 3
+#
+# Or create a symlink in your workspace root:
+#   ln -s src/sim_harness/scripts/run_tests run_tests
+#   ./run_tests
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Find workspace root (look for src/ directory)
+find_workspace_root() {
+    local dir="$PWD"
+    while [[ "$dir" != "/" ]]; do
+        if [[ -d "$dir/src" ]]; then
+            echo "$dir"
+            return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+    echo "$PWD"
+}
+
+WORKSPACE_ROOT=$(find_workspace_root)
+cd "$WORKSPACE_ROOT"
+
+echo "Running tests in: $WORKSPACE_ROOT"
+echo "================================================"
+
+# Run colcon test with live output, passing through all args
+colcon test --event-handlers console_direct+ "$@"
+TEST_EXIT_CODE=$?
+
+echo ""
+echo "================================================"
+echo "TEST RESULTS"
+echo "================================================"
+
+# Format and display results
+python3 "$SCRIPT_DIR/format_test_results.py" "$WORKSPACE_ROOT/build"
+
+exit $TEST_EXIT_CODE
