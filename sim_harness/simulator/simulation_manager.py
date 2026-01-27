@@ -12,6 +12,7 @@ import atexit
 import hashlib
 import os
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Set
 
@@ -201,14 +202,20 @@ class SimulationManager:
             self._isolation_config = get_test_isolation_config()
             apply_test_isolation(self._isolation_config)
 
-            # Check if a compatible simulation is already running externally
-            if self._gazebo.is_running():
-                # External simulation running - try to use it
+            # Check if a functional simulation is already running externally
+            # Use is_responsive() not is_running() to detect zombie processes
+            if self._gazebo.is_responsive():
+                # External simulation running and responsive - try to use it
                 self._current_request = request
                 self._current_hash = request_hash
                 self._started_by_us = False
                 self._active_users += 1
                 return True
+
+            # If processes exist but aren't responsive, kill them (zombie cleanup)
+            if self._gazebo.is_running():
+                self._gazebo.kill_gazebo()
+                time.sleep(1.0)  # Brief wait for processes to terminate
 
             # Start new simulation
             success = self._start_internal(

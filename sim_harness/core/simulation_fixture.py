@@ -156,7 +156,14 @@ class SimulationTestFixture(SimTestFixture):
         """
         # Duplicate parent's setup/teardown logic (can't call fixture directly)
         self._setup_test()
-        self.on_setup()
+        try:
+            self.on_setup()
+        except BaseException:
+            # Cleanup if on_setup fails (including pytest.skip)
+            # Without this, the node is never destroyed, corrupting rclpy context
+            self.on_teardown()
+            self._teardown_test()
+            raise
         yield
         self.on_teardown()
         self._teardown_test()

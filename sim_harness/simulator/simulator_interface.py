@@ -68,7 +68,23 @@ class SimulatorInterface(ABC):
 
     @abstractmethod
     def is_running(self) -> bool:
-        """Check if the simulator is running."""
+        """Check if the simulator processes are running."""
+        pass
+
+    @abstractmethod
+    def is_responsive(self, timeout_sec: float = 2.0) -> bool:
+        """
+        Check if the simulator is responsive (not just running).
+
+        This is a stronger check than is_running() - verifies the simulator
+        is actually functional, not just that processes exist.
+
+        Args:
+            timeout_sec: Maximum time to wait for response check
+
+        Returns:
+            True if simulator is responsive, False otherwise
+        """
         pass
 
     @abstractmethod

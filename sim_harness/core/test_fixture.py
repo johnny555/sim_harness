@@ -63,7 +63,14 @@ class SimTestFixture(RequirementValidator):
         """
         # Setup
         self._setup_test()
-        self.on_setup()  # Hook for subclass setup
+        try:
+            self.on_setup()  # Hook for subclass setup
+        except BaseException:
+            # Cleanup if on_setup fails (including pytest.skip)
+            # Without this, the node is never destroyed, corrupting rclpy context
+            self.on_teardown()
+            self._teardown_test()
+            raise
         yield
         # Teardown
         self.on_teardown()  # Hook for subclass teardown
@@ -98,10 +105,20 @@ class SimTestFixture(RequirementValidator):
 
     def _setup_test(self) -> None:
         """Initialize ROS 2 node and executor for the test."""
-        # Initialize rclpy if needed
+        # Initialize rclpy if needed, or re-initialize if context became invalid
         if not SimTestFixture._rclpy_initialized:
             rclpy.init()
             SimTestFixture._rclpy_initialized = True
+        else:
+            # Check if context is still valid (can become invalid after exceptions)
+            try:
+                context = rclpy.get_default_context()
+                if not context.ok():
+                    # Context is invalid, need to reinitialize
+                    rclpy.init()
+            except Exception:
+                # Any error checking context means we need to reinitialize
+                rclpy.init()
 
         # Get test isolation config
         self._isolation_config = get_test_isolation_config()

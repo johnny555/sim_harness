@@ -111,8 +111,48 @@ class GazeboBackend(SimulatorInterface):
         Check if Gazebo processes are running.
 
         Looks for processes matching gz, gzserver, ruby.*gz patterns.
+        Note: This only checks for process existence, not functionality.
+        Use is_responsive() to check if Gazebo is actually simulating.
         """
         return len(self.get_gazebo_pids()) > 0
+
+    def is_responsive(self, timeout_sec: float = 2.0) -> bool:
+        """
+        Check if Gazebo is actually responsive and simulating.
+
+        This is a stronger check than is_running() - it verifies that:
+        1. Gazebo processes exist
+        2. Gazebo is publishing the /clock topic (indicates active simulation)
+
+        Use this to detect zombie Gazebo processes that exist but aren't
+        actually running a simulation.
+
+        Args:
+            timeout_sec: Maximum time to wait for topic check
+
+        Returns:
+            True if Gazebo is responsive, False otherwise
+        """
+        if not self.is_running():
+            return False
+
+        # Check if /clock topic is available - this indicates Gazebo is actually
+        # running a simulation, not just zombie processes
+        try:
+            result = subprocess.run(
+                ["gz", "topic", "-l"],
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec
+            )
+            if result.returncode != 0:
+                return False
+
+            topics = result.stdout.strip().split('\n')
+            # Look for clock topic - always present in a running simulation
+            return any('/clock' in topic for topic in topics)
+        except (subprocess.TimeoutExpired, Exception):
+            return False
 
     def wait_until_ready(self, timeout_sec: float = 30.0) -> bool:
         """
@@ -235,6 +275,9 @@ class NullBackend(SimulatorInterface):
         return SimulatorType.NONE
 
     def is_running(self) -> bool:
+        return True
+
+    def is_responsive(self, timeout_sec: float = 2.0) -> bool:
         return True
 
     def wait_until_ready(self, timeout_sec: float = 30.0) -> bool:
