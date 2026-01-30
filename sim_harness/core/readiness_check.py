@@ -144,7 +144,8 @@ class ReadinessCheck:
         self,
         node: Node,
         default_timeout: float = 5.0,
-        stop_on_required_failure: bool = False
+        stop_on_required_failure: bool = False,
+        executor: Optional[SingleThreadedExecutor] = None
     ):
         """
         Initialize readiness check.
@@ -153,13 +154,21 @@ class ReadinessCheck:
             node: ROS 2 node for subscriptions/service calls
             default_timeout: Default timeout for each check
             stop_on_required_failure: Stop checking if a required check fails
+            executor: Optional executor to use. If None, creates a new one.
+                      Pass the test fixture's executor when the node is already
+                      owned by an executor to avoid dual-executor conflicts.
         """
         self.node = node
         self.default_timeout = default_timeout
         self.stop_on_required_failure = stop_on_required_failure
         self._checks: List[CheckItem] = []
-        self._executor = SingleThreadedExecutor()
-        self._executor.add_node(node)
+        if executor is not None:
+            self._executor = executor
+            self._owns_executor = False
+        else:
+            self._executor = SingleThreadedExecutor()
+            self._executor.add_node(node)
+            self._owns_executor = True
 
     def add_topic(
         self,
@@ -604,7 +613,8 @@ def create_standard_check(
     controllers: Optional[List[str]] = None,
     transforms: Optional[List[tuple]] = None,
     lifecycle_nodes: Optional[List[str]] = None,
-    timeout: float = 5.0
+    timeout: float = 5.0,
+    executor: Optional[SingleThreadedExecutor] = None,
 ) -> ReadinessCheck:
     """
     Create a readiness check with common configurations.
@@ -634,7 +644,7 @@ def create_standard_check(
         )
         result = check.run()
     """
-    check = ReadinessCheck(node, default_timeout=timeout)
+    check = ReadinessCheck(node, default_timeout=timeout, executor=executor)
 
     if sensors:
         for topic, msg_type in sensors.items():

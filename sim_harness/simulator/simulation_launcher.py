@@ -99,12 +99,14 @@ class SimulationLauncher:
         env.update(config.env_vars)
 
         # Start the process
+        # Note: stdout must NOT be PIPE unless actively read, as the buffer
+        # fills and blocks the subprocess (especially Gazebo's verbose output).
         try:
             self._process = subprocess.Popen(
                 cmd,
                 env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 preexec_fn=os.setsid  # Create new process group for cleanup
             )
         except Exception as e:

@@ -105,6 +105,11 @@ class SimTestFixture(RequirementValidator):
 
     def _setup_test(self) -> None:
         """Initialize ROS 2 node and executor for the test."""
+        # Apply test isolation BEFORE rclpy.init() so the ROS_DOMAIN_ID
+        # environment variable is set when the DDS participant is created.
+        self._isolation_config = get_test_isolation_config()
+        apply_test_isolation(self._isolation_config)
+
         # Initialize rclpy if needed, or re-initialize if context became invalid
         if not SimTestFixture._rclpy_initialized:
             rclpy.init()
@@ -119,10 +124,6 @@ class SimTestFixture(RequirementValidator):
             except Exception:
                 # Any error checking context means we need to reinitialize
                 rclpy.init()
-
-        # Get test isolation config
-        self._isolation_config = get_test_isolation_config()
-        apply_test_isolation(self._isolation_config)
 
         # Create unique node name
         node_name = generate_test_node_name(
@@ -281,12 +282,12 @@ def ros_node():
             # ros_node is a rclpy.node.Node instance
             pub = ros_node.create_publisher(String, '/topic', 10)
     """
+    config = get_test_isolation_config()
+    apply_test_isolation(config)
+
     if not SimTestFixture._rclpy_initialized:
         rclpy.init()
         SimTestFixture._rclpy_initialized = True
-
-    config = get_test_isolation_config()
-    apply_test_isolation(config)
 
     node_name = generate_test_node_name("pytest_node", config.domain_id)
     node = rclpy.create_node(
