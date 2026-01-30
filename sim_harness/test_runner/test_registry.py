@@ -264,8 +264,8 @@ class TestRegistry:
         if not src_dir.exists():
             return []
 
-        # Walk the source directory
-        for root, dirs, files in os.walk(src_dir):
+        # Walk the source directory (followlinks for symlinked packages)
+        for root, dirs, files in os.walk(src_dir, followlinks=True):
             root_path = Path(root)
 
             # Filter out directories to skip

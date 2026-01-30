@@ -80,7 +80,7 @@ class CppTestRegistry:
         """
         binaries = []
 
-        for root, dirs, files in os.walk(directory):
+        for root, dirs, files in os.walk(directory, followlinks=True):
             root_path = Path(root)
 
             # Filter out directories to skip
