@@ -96,11 +96,11 @@ def generate_test_description():
 
     # Get package directories
     try:
-        sim_test_utils_dir = get_package_share_directory('sim_harness')
+        sim_harness_dir = get_package_share_directory('sim_harness')
     except PackageNotFoundError:
         # Package not installed yet - skip
         return LaunchDescription([
-            LogInfo(msg='sim_test_utils package not found, skipping test'),
+            LogInfo(msg='sim_harness package not found, skipping test'),
             launch_testing.actions.ReadyToTest(),
         ]), {}
 
@@ -110,8 +110,8 @@ def generate_test_description():
     set_turtlebot_model = SetEnvironmentVariable('TURTLEBOT3_MODEL', 'waffle')
 
     # Test binary path - in lib/<package>/, not share/<package>/lib/
-    # The share dir is sim_test_utils_dir, we need the lib dir
-    install_prefix = os.path.dirname(os.path.dirname(sim_test_utils_dir))
+    # The share dir is sim_harness_dir, we need the lib dir
+    install_prefix = os.path.dirname(os.path.dirname(sim_harness_dir))
     test_binary = os.path.join(
         install_prefix,
         'lib',

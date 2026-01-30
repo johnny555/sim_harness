@@ -16,13 +16,13 @@ Prerequisites:
     export TURTLEBOT3_MODEL=waffle  # or burger
 
 Usage:
-    ros2 launch sim_test_utils turtlebot3_test.launch.py
+    ros2 launch sim_harness turtlebot3_test.launch.py
 
     # With custom model:
-    ros2 launch sim_test_utils turtlebot3_test.launch.py model:=burger
+    ros2 launch sim_harness turtlebot3_test.launch.py model:=burger
 
     # Headless mode:
-    ros2 launch sim_test_utils turtlebot3_test.launch.py headless:=true
+    ros2 launch sim_harness turtlebot3_test.launch.py headless:=true
 """
 
 import os
@@ -66,7 +66,7 @@ def get_unique_domain_id():
 
 def generate_launch_description():
     # Get package directories
-    sim_test_utils_dir = get_package_share_directory('sim_harness')
+    sim_harness_dir = get_package_share_directory('sim_harness')
 
     # Declare launch arguments
     declare_model_arg = DeclareLaunchArgument(
@@ -221,7 +221,7 @@ def generate_launch_description():
 
         # 3. Test binary (delayed start to allow system to initialize)
         test_binary = os.path.join(
-            sim_test_utils_dir,
+            sim_harness_dir,
             'lib',
             'sim_harness',
             'turtlebot3_integration_test'

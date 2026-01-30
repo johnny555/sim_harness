@@ -11,7 +11,7 @@ a Gazebo simulation. It handles:
 - Cleanup on shutdown
 
 Usage in consumer packages:
-    from sim_test_utils.launch.gazebo_test import generate_gazebo_test_description
+    from sim_harness.launch.gazebo_test import generate_gazebo_test_description
 
     def generate_test_description():
         return generate_gazebo_test_description(
