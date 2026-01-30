@@ -42,6 +42,7 @@
   <depend>launch_ros</depend>
   <depend>launch_testing</depend>
   <depend>launch_testing_ros</depend>
+  <exec_depend>launch_testing_ament_cmake</exec_depend>
 
   <!-- CLI extension -->
   <exec_depend>ros2cli</exec_depend>
