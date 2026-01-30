@@ -35,7 +35,7 @@ LifecycleResult assertLifecycleNodeActive(
 }
 
 LifecycleResult assertLifecycleNodeState(
-  rclcpp::Node::SharedPtr node,
+  rclcpp::Node::SharedPtr /* node */,
   const std::string & lifecycle_node_name,
   LifecycleState expected_state,
   std::chrono::seconds timeout)
@@ -126,7 +126,7 @@ std::vector<LifecycleResult> assertLifecycleNodesActive(
 }
 
 ControllerResult assertControllerActive(
-  rclcpp::Node::SharedPtr node,
+  rclcpp::Node::SharedPtr /* node */,
   const std::string & controller_manager_name,
   const std::string & controller_name,
   std::chrono::seconds timeout)

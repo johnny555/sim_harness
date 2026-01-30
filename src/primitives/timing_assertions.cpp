@@ -15,7 +15,7 @@ namespace sim_harness::primitives
 {
 
 TimingResult assertPublishRate(
-  rclcpp::Node::SharedPtr node,
+  rclcpp::Node::SharedPtr /* node */,
   const std::string & topic,
   double expected_hz,
   double tolerance_percent,
@@ -71,7 +71,7 @@ TimingResult assertPublishRate(
 }
 
 TimingResult assertLatency(
-  rclcpp::Node::SharedPtr node,
+  rclcpp::Node::SharedPtr /* node */,
   const std::string & topic,
   std::chrono::milliseconds max_latency,
   std::chrono::seconds sample_duration)
@@ -130,7 +130,7 @@ TimingResult assertLatency(
 }
 
 bool assertTransformAvailable(
-  rclcpp::Node::SharedPtr node,
+  rclcpp::Node::SharedPtr /* node */,
   const std::string & target_frame,
   const std::string & source_frame,
   std::chrono::milliseconds max_age)
@@ -185,7 +185,7 @@ bool assertTransformAvailable(
 }
 
 bool assertActionServerResponsive(
-  rclcpp::Node::SharedPtr node,
+  rclcpp::Node::SharedPtr /* node */,
   const std::string & action_name,
   std::chrono::seconds timeout)
 {
