@@ -27,6 +27,9 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: osrf/ros:jazzy-desktop
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -77,6 +80,9 @@ jobs:
     container:
       image: osrf/ros:jazzy-desktop
     needs: build-and-unit-test
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -162,6 +168,9 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: osrf/ros:jazzy-desktop
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
