@@ -14,7 +14,6 @@ from typing import List, Optional, Tuple
 
 import rclpy
 from rclpy.node import Node
-from rclpy.executors import SingleThreadedExecutor
 from rclpy.action import ActionClient
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
@@ -22,7 +21,7 @@ from geometry_msgs.msg import PoseStamped, Point
 from nav_msgs.msg import Odometry, OccupancyGrid
 from nav2_msgs.action import NavigateToPose
 
-from sim_harness.core.spin_helpers import spin_for_duration
+from sim_harness.core.spin_helpers import managed_subscription, temporary_node, spin_for_duration
 
 
 @dataclass
@@ -73,9 +72,6 @@ def assert_reaches_goal(
     Returns:
         NavigationResult with success status, final distance, and timing
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     goal_x = goal_pose.pose.position.x
     goal_y = goal_pose.pose.position.y
 
@@ -94,8 +90,6 @@ def assert_reaches_goal(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    odom_sub = node.create_subscription(Odometry, odom_topic, odom_callback, qos)
-
     result = NavigationResult(
         success=False,
         final_distance_to_goal=float('inf'),
@@ -103,7 +97,7 @@ def assert_reaches_goal(
         details=""
     )
 
-    try:
+    with managed_subscription(node, Odometry, odom_topic, odom_callback, qos) as executor:
         start_time = time.monotonic()
 
         while time.monotonic() - start_time < timeout_sec:
@@ -121,10 +115,6 @@ def assert_reaches_goal(
 
         result.time_taken_sec = time.monotonic() - start_time
         result.details = f"Timeout after {result.time_taken_sec:.1f}s, distance to goal: {result.final_distance_to_goal:.2f}m"
-
-    finally:
-        node.destroy_subscription(odom_sub)
-        executor.remove_node(node)
 
     return result
 
@@ -166,9 +156,6 @@ def assert_follows_path(
             details="Path must have at least 2 waypoints"
         )
 
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     # Extract path points
     path_points = [(p.pose.position.x, p.pose.position.y) for p in path]
 
@@ -201,8 +188,6 @@ def assert_follows_path(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    odom_sub = node.create_subscription(Odometry, odom_topic, odom_callback, qos)
-
     result = NavigationResult(
         success=False,
         final_distance_to_goal=float('inf'),
@@ -210,7 +195,7 @@ def assert_follows_path(
         details=""
     )
 
-    try:
+    with managed_subscription(node, Odometry, odom_topic, odom_callback, qos) as executor:
         start_time = time.monotonic()
         goal = path_points[-1]
 
@@ -236,10 +221,6 @@ def assert_follows_path(
 
         result.time_taken_sec = time.monotonic() - start_time
         result.details = f"Timeout, max deviation: {max_deviation:.2f}m"
-
-    finally:
-        node.destroy_subscription(odom_sub)
-        executor.remove_node(node)
 
     return result
 
@@ -293,12 +274,6 @@ def assert_navigation_action_succeeds(
         - time_taken_sec: Time from goal submission to result
         - details: Status message including failure status code if applicable
     """
-    temp_node = rclpy.create_node(f"nav_action_client_{int(time.time() * 1000) % 10000}")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp_node)
-
-    action_client = ActionClient(temp_node, NavigateToPose, action_name)
-
     result = NavigationResult(
         success=False,
         final_distance_to_goal=float('inf'),
@@ -306,55 +281,56 @@ def assert_navigation_action_succeeds(
         details=""
     )
 
-    try:
-        # Wait for action server
-        if not action_client.wait_for_server(timeout_sec=10.0):
-            result.details = f"Action server {action_name} not available"
-            return result
+    with temporary_node("nav_action_client") as (temp_node, executor):
+        action_client = ActionClient(temp_node, NavigateToPose, action_name)
 
-        # Send goal
-        goal_msg = NavigateToPose.Goal()
-        goal_msg.pose = goal_pose
-
-        send_goal_future = action_client.send_goal_async(goal_msg)
-
-        start_time = time.monotonic()
-
-        # Wait for goal acceptance
-        while not send_goal_future.done():
-            executor.spin_once(timeout_sec=0.1)
-            if time.monotonic() - start_time > timeout_sec:
-                result.details = "Timeout waiting for goal acceptance"
+        try:
+            # Wait for action server
+            if not action_client.wait_for_server(timeout_sec=10.0):
+                result.details = f"Action server {action_name} not available"
                 return result
 
-        goal_handle = send_goal_future.result()
-        if not goal_handle.accepted:
-            result.details = "Goal was rejected"
-            return result
+            # Send goal
+            goal_msg = NavigateToPose.Goal()
+            goal_msg.pose = goal_pose
 
-        # Wait for result
-        result_future = goal_handle.get_result_async()
+            send_goal_future = action_client.send_goal_async(goal_msg)
 
-        while not result_future.done():
-            executor.spin_once(timeout_sec=0.1)
-            if time.monotonic() - start_time > timeout_sec:
-                result.details = "Timeout waiting for navigation result"
+            start_time = time.monotonic()
+
+            # Wait for goal acceptance
+            while not send_goal_future.done():
+                executor.spin_once(timeout_sec=0.1)
+                if time.monotonic() - start_time > timeout_sec:
+                    result.details = "Timeout waiting for goal acceptance"
+                    return result
+
+            goal_handle = send_goal_future.result()
+            if not goal_handle.accepted:
+                result.details = "Goal was rejected"
                 return result
 
-        action_result = result_future.result()
-        result.time_taken_sec = time.monotonic() - start_time
+            # Wait for result
+            result_future = goal_handle.get_result_async()
 
-        if action_result.status == 4:  # SUCCEEDED
-            result.success = True
-            result.final_distance_to_goal = 0.0
-            result.details = f"Navigation succeeded in {result.time_taken_sec:.1f}s"
-        else:
-            result.details = f"Navigation failed with status {action_result.status}"
+            while not result_future.done():
+                executor.spin_once(timeout_sec=0.1)
+                if time.monotonic() - start_time > timeout_sec:
+                    result.details = "Timeout waiting for navigation result"
+                    return result
 
-    finally:
-        action_client.destroy()
-        executor.remove_node(temp_node)
-        temp_node.destroy_node()
+            action_result = result_future.result()
+            result.time_taken_sec = time.monotonic() - start_time
+
+            if action_result.status == 4:  # SUCCEEDED
+                result.success = True
+                result.final_distance_to_goal = 0.0
+                result.details = f"Navigation succeeded in {result.time_taken_sec:.1f}s"
+            else:
+                result.details = f"Navigation failed with status {action_result.status}"
+
+        finally:
+            action_client.destroy()
 
     return result
 
@@ -381,9 +357,6 @@ def assert_costmap_contains_obstacle(
     Returns:
         True if obstacle found at position
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     costmap_msg: Optional[OccupancyGrid] = None
 
     def callback(msg: OccupancyGrid):
@@ -396,9 +369,7 @@ def assert_costmap_contains_obstacle(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    sub = node.create_subscription(OccupancyGrid, costmap_topic, callback, qos)
-
-    try:
+    with managed_subscription(node, OccupancyGrid, costmap_topic, callback, qos) as executor:
         start_time = time.monotonic()
         while costmap_msg is None and time.monotonic() - start_time < timeout_sec:
             executor.spin_once(timeout_sec=0.1)
@@ -424,7 +395,3 @@ def assert_costmap_contains_obstacle(
         cost = costmap_msg.data[index]
 
         return cost >= min_cost
-
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)

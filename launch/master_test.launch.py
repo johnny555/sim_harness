@@ -31,7 +31,6 @@ any launch test without modification.
 
 import importlib.util
 import os
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -55,15 +54,11 @@ from launch.substitutions import (
 import launch_testing
 from launch_testing.actions import ReadyToTest
 
-
-def get_unique_domain_id() -> str:
-    """Generate a unique ROS_DOMAIN_ID for test isolation."""
-    return str(random.randint(1, 232))
-
-
-def get_gz_partition(domain_id: str) -> str:
-    """Generate GZ_PARTITION from domain ID."""
-    return f"test_partition_{domain_id}"
+from sim_harness.launch_utils import (
+    get_unique_domain_id,
+    get_gz_partition,
+    create_isolation_env_actions,
+)
 
 
 def load_test_module(test_path: Path):
@@ -128,11 +123,10 @@ def launch_setup(context, *args, **kwargs):
                 test_args[key] = value
 
     # Environment setup for isolation
-    env_actions = [
-        SetEnvironmentVariable("ROS_DOMAIN_ID", domain_id),
-        SetEnvironmentVariable("GZ_PARTITION", gz_partition),
-        SetEnvironmentVariable("ROS_LOCALHOST_ONLY", "1"),
-        SetEnvironmentVariable("PYTHONUNBUFFERED", "1"),
+    env_actions = create_isolation_env_actions(
+        domain_id, gz_partition,
+        localhost_only=True, unbuffered_python=True,
+    ) + [
         LogInfo(msg=f"Running test: {test_path.name}"),
         LogInfo(msg=f"Domain ID: {domain_id}, GZ_PARTITION: {gz_partition}"),
     ]

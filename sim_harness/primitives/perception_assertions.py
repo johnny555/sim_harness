@@ -17,6 +17,8 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point
 
+from sim_harness.core.spin_helpers import managed_subscription
+
 
 @dataclass
 class DetectionResult:
@@ -107,43 +109,28 @@ def assert_object_detected(
 
     # Try to subscribe - message type is dynamic
     try:
-        # Use generic subscription that accepts any message type
         from rclpy.qos import qos_profile_sensor_data
-        sub = node.create_subscription(
-            Any,  # Will be overridden by topic type discovery
-            detection_topic,
-            detection_callback,
-            qos_profile_sensor_data
-        )
+        with managed_subscription(node, Any, detection_topic, detection_callback, qos_profile_sensor_data) as executor:
+            start = time.monotonic()
+            while time.monotonic() - start < timeout_sec:
+                executor.spin_once(timeout_sec=0.1)
+
+                # Check if any detection is within radius
+                for pos in detected_positions:
+                    dist = _distance_3d(pos, expected_position)
+                    if dist <= search_radius:
+                        result.detected = True
+                        result.detection_count = len(detected_positions)
+                        result.closest_position = pos
+                        result.details = (
+                            f"Object detected at ({pos.x:.2f}, {pos.y:.2f}, {pos.z:.2f}), "
+                            f"distance={dist:.2f}m from expected"
+                        )
+                        return result
+
     except Exception as e:
         result.details = f"Failed to subscribe to {detection_topic}: {e}"
         return result
-
-    # Wait and spin
-    start = time.monotonic()
-    executor = rclpy.executors.SingleThreadedExecutor()
-    executor.add_node(node)
-
-    try:
-        while time.monotonic() - start < timeout_sec:
-            executor.spin_once(timeout_sec=0.1)
-
-            # Check if any detection is within radius
-            for pos in detected_positions:
-                dist = _distance_3d(pos, expected_position)
-                if dist <= search_radius:
-                    result.detected = True
-                    result.detection_count = len(detected_positions)
-                    result.closest_position = pos
-                    result.details = (
-                        f"Object detected at ({pos.x:.2f}, {pos.y:.2f}, {pos.z:.2f}), "
-                        f"distance={dist:.2f}m from expected"
-                    )
-                    return result
-
-    finally:
-        executor.remove_node(node)
-        node.destroy_subscription(sub)
 
     # Not found within timeout
     result.detection_count = len(detected_positions)
@@ -221,42 +208,28 @@ def assert_object_detected_by_class(
     # Subscribe
     try:
         from rclpy.qos import qos_profile_sensor_data
-        sub = node.create_subscription(
-            Any,
-            detection_topic,
-            detection_callback,
-            qos_profile_sensor_data
-        )
+        with managed_subscription(node, Any, detection_topic, detection_callback, qos_profile_sensor_data) as executor:
+            start = time.monotonic()
+            while time.monotonic() - start < timeout_sec:
+                executor.spin_once(timeout_sec=0.1)
+
+                # Check for matching class with sufficient confidence
+                for class_name, confidence, position in all_detections:
+                    if class_name.lower() == object_class.lower() and confidence >= min_confidence:
+                        result.detected = True
+                        result.detection_count = sum(
+                            1 for c, conf, _ in all_detections
+                            if c.lower() == object_class.lower() and conf >= min_confidence
+                        )
+                        result.closest_position = position
+                        result.details = (
+                            f"Detected '{class_name}' with confidence {confidence:.2f}"
+                        )
+                        return result
+
     except Exception as e:
         result.details = f"Failed to subscribe to {detection_topic}: {e}"
         return result
-
-    # Wait and spin
-    start = time.monotonic()
-    executor = rclpy.executors.SingleThreadedExecutor()
-    executor.add_node(node)
-
-    try:
-        while time.monotonic() - start < timeout_sec:
-            executor.spin_once(timeout_sec=0.1)
-
-            # Check for matching class with sufficient confidence
-            for class_name, confidence, position in all_detections:
-                if class_name.lower() == object_class.lower() and confidence >= min_confidence:
-                    result.detected = True
-                    result.detection_count = sum(
-                        1 for c, conf, _ in all_detections
-                        if c.lower() == object_class.lower() and conf >= min_confidence
-                    )
-                    result.closest_position = position
-                    result.details = (
-                        f"Detected '{class_name}' with confidence {confidence:.2f}"
-                    )
-                    return result
-
-    finally:
-        executor.remove_node(node)
-        node.destroy_subscription(sub)
 
     # Not found
     class_matches = [
@@ -331,34 +304,20 @@ def assert_min_objects_detected(
     # Subscribe
     try:
         from rclpy.qos import qos_profile_sensor_data
-        sub = node.create_subscription(
-            Any,
-            detection_topic,
-            detection_callback,
-            qos_profile_sensor_data
-        )
+        with managed_subscription(node, Any, detection_topic, detection_callback, qos_profile_sensor_data) as executor:
+            start = time.monotonic()
+            while time.monotonic() - start < timeout_sec:
+                executor.spin_once(timeout_sec=0.1)
+
+                if max_count_seen >= min_count:
+                    result.detected = True
+                    result.detection_count = max_count_seen
+                    result.details = f"Detected {max_count_seen} objects (>= {min_count} required)"
+                    return result
+
     except Exception as e:
         result.details = f"Failed to subscribe to {detection_topic}: {e}"
         return result
-
-    # Wait and spin
-    start = time.monotonic()
-    executor = rclpy.executors.SingleThreadedExecutor()
-    executor.add_node(node)
-
-    try:
-        while time.monotonic() - start < timeout_sec:
-            executor.spin_once(timeout_sec=0.1)
-
-            if max_count_seen >= min_count:
-                result.detected = True
-                result.detection_count = max_count_seen
-                result.details = f"Detected {max_count_seen} objects (>= {min_count} required)"
-                return result
-
-    finally:
-        executor.remove_node(node)
-        node.destroy_subscription(sub)
 
     result.detection_count = max_count_seen
     result.details = f"Only detected {max_count_seen} objects, need >= {min_count}"
@@ -431,29 +390,15 @@ def assert_region_clear(
     # Subscribe
     try:
         from rclpy.qos import qos_profile_sensor_data
-        sub = node.create_subscription(
-            Any,
-            detection_topic,
-            detection_callback,
-            qos_profile_sensor_data
-        )
+        with managed_subscription(node, Any, detection_topic, detection_callback, qos_profile_sensor_data) as executor:
+            start = time.monotonic()
+            while time.monotonic() - start < observation_period_sec:
+                executor.spin_once(timeout_sec=0.1)
+                if detected_in_region:
+                    break
     except Exception:
         # If we can't subscribe, assume clear (conservative approach)
         return True
-
-    # Observe for the specified period
-    start = time.monotonic()
-    executor = rclpy.executors.SingleThreadedExecutor()
-    executor.add_node(node)
-
-    try:
-        while time.monotonic() - start < observation_period_sec:
-            executor.spin_once(timeout_sec=0.1)
-            if detected_in_region:
-                break
-    finally:
-        executor.remove_node(node)
-        node.destroy_subscription(sub)
 
     return not detected_in_region
 

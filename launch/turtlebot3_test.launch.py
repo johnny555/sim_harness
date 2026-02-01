@@ -26,7 +26,6 @@ Usage:
 """
 
 import os
-import random
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -58,10 +57,7 @@ from launch_ros.substitutions import FindPackageShare
 import launch_testing
 from launch_testing.actions import ReadyToTest
 
-
-def get_unique_domain_id():
-    """Generate a unique ROS_DOMAIN_ID for test isolation."""
-    return str(random.randint(1, 232))
+from sim_harness.launch_utils import get_unique_domain_id, get_gz_partition
 
 
 def generate_launch_description():
@@ -107,7 +103,7 @@ def generate_launch_description():
 
     # Generate unique domain ID for test isolation
     domain_id = get_unique_domain_id()
-    gz_partition = f"gz_test_{domain_id}"
+    gz_partition = get_gz_partition(domain_id)
 
     # Environment setup for isolation
     set_domain_id = SetEnvironmentVariable('ROS_DOMAIN_ID', domain_id)

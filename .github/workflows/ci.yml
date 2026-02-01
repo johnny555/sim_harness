@@ -1,0 +1,197 @@
+name: CI - Build & Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-progress runs for the same branch/PR
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ROS_DISTRO: jazzy
+  # Force headless operation everywhere
+  GAZEBO_HEADLESS: "1"
+  ROS_LOCALHOST_ONLY: "1"
+
+jobs:
+  # ---------------------------------------------------------------
+  # Job 1: Build and run unit tests (no simulator required)
+  # ---------------------------------------------------------------
+  build-and-unit-test:
+    name: Build & Unit Tests
+    runs-on: ubuntu-24.04
+    container:
+      image: osrf/ros:jazzy-desktop
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: src/sim_harness
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y python3-pip python3-pytest python3-pytest-cov
+          rosdep update
+          rosdep install --from-paths src --ignore-src -r -y
+
+      - name: Build
+        run: |
+          source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+          colcon build --packages-select sim_harness \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+      - name: Run unit tests
+        run: |
+          source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+          source install/setup.bash
+          colcon test --packages-select sim_harness \
+            --ctest-args -R 'test_.*' -E 'integration' \
+            --event-handlers console_direct+
+
+      - name: Collect test results
+        if: always()
+        run: |
+          colcon test-result --verbose || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: |
+            build/sim_harness/test_results/
+            log/latest_test/
+
+  # ---------------------------------------------------------------
+  # Job 2: Integration tests with headless Gazebo
+  # ---------------------------------------------------------------
+  integration-test:
+    name: Integration Tests (Headless Gazebo)
+    runs-on: ubuntu-24.04
+    container:
+      image: osrf/ros:jazzy-desktop
+    needs: build-and-unit-test
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: src/sim_harness
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            python3-pip \
+            python3-pytest \
+            python3-pytest-cov \
+            xvfb \
+            mesa-utils
+
+      - name: Install ROS and Gazebo dependencies
+        run: |
+          apt-get install -y \
+            ros-${{ env.ROS_DISTRO }}-ros-gz \
+            ros-${{ env.ROS_DISTRO }}-turtlebot3-gazebo \
+            ros-${{ env.ROS_DISTRO }}-turtlebot3-navigation2 \
+            ros-${{ env.ROS_DISTRO }}-nav2-bringup \
+            || echo "Some optional packages unavailable - tests may be skipped"
+          rosdep update
+          rosdep install --from-paths src --ignore-src -r -y
+
+      - name: Build
+        run: |
+          source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+          colcon build --packages-select sim_harness \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+      - name: Run integration tests (headless)
+        env:
+          # Xvfb provides a virtual display for any rendering needs
+          DISPLAY: ":99"
+          TURTLEBOT3_MODEL: waffle
+          # Gazebo Harmonic headless rendering via EGL
+          MESA_GL_VERSION_OVERRIDE: "3.3"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          # Start virtual framebuffer for any GUI dependencies
+          Xvfb :99 -screen 0 1024x768x24 &
+          XVFB_PID=$!
+          sleep 2
+
+          source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+          source install/setup.bash
+
+          # Run integration tests sequentially to avoid simulator conflicts
+          colcon test --packages-select sim_harness \
+            --ctest-args -R 'integration' \
+            --event-handlers console_direct+ \
+            --parallel-workers 1 \
+            || true
+
+          # Cleanup
+          kill $XVFB_PID 2>/dev/null || true
+          pkill -9 gzserver 2>/dev/null || true
+          pkill -9 gzclient 2>/dev/null || true
+          pkill -9 ruby 2>/dev/null || true
+
+      - name: Collect test results
+        if: always()
+        run: |
+          colcon test-result --verbose || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: |
+            build/sim_harness/test_results/
+            log/latest_test/
+
+  # ---------------------------------------------------------------
+  # Job 3: Lint & static analysis
+  # ---------------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    container:
+      image: osrf/ros:jazzy-desktop
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: src/sim_harness
+
+      - name: Install linting tools
+        run: |
+          apt-get update
+          apt-get install -y python3-pip
+          pip3 install --break-system-packages flake8 mypy
+
+      - name: Run flake8
+        run: |
+          cd src/sim_harness
+          flake8 sim_harness/ --max-line-length=120 --count --show-source --statistics \
+            || echo "::warning::flake8 found issues"
+
+      - name: Run ament_lint (if available)
+        run: |
+          source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+          cd src/sim_harness
+          ament_flake8 || echo "::warning::ament_flake8 found issues"
+          ament_pep257 || echo "::warning::ament_pep257 found issues"

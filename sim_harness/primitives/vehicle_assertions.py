@@ -21,7 +21,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import Point, Twist, TwistStamped, Quaternion
 from nav_msgs.msg import Odometry
 
-from sim_harness.core.spin_helpers import spin_for_duration
+from sim_harness.core.spin_helpers import managed_subscription, spin_for_duration
 
 
 @dataclass
@@ -255,9 +255,6 @@ def assert_vehicle_stationary(
     Returns:
         True if vehicle remained stationary
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     if odom_topic is None:
         odom_topic = f"/{vehicle_id}/odom"
 
@@ -277,19 +274,13 @@ def assert_vehicle_stationary(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    odom_sub = node.create_subscription(Odometry, odom_topic, odom_callback, qos)
-
-    try:
+    with managed_subscription(node, Odometry, odom_topic, odom_callback, qos) as executor:
         start_time = time.monotonic()
         while time.monotonic() - start_time < duration_sec:
             executor.spin_once(timeout_sec=0.01)
 
             if max_velocity_seen > velocity_threshold:
                 return False
-
-    finally:
-        node.destroy_subscription(odom_sub)
-        executor.remove_node(node)
 
     return max_velocity_seen <= velocity_threshold
 
@@ -319,9 +310,6 @@ def assert_vehicle_velocity(
     Returns:
         VelocityResult with success status and measured velocity
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     if odom_topic is None:
         odom_topic = f"/{vehicle_id}/odom"
 
@@ -340,15 +328,13 @@ def assert_vehicle_velocity(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    odom_sub = node.create_subscription(Odometry, odom_topic, odom_callback, qos)
-
     result = VelocityResult(
         success=False,
         measured_velocity=0.0,
         details=""
     )
 
-    try:
+    with managed_subscription(node, Odometry, odom_topic, odom_callback, qos) as executor:
         start_time = time.monotonic()
         while time.monotonic() - start_time < timeout_sec:
             executor.spin_once(timeout_sec=0.01)
@@ -362,10 +348,6 @@ def assert_vehicle_velocity(
             f"Measured velocity: {result.measured_velocity:.2f} m/s "
             f"(target: {target_velocity} +/- {tolerance} m/s)"
         )
-
-    finally:
-        node.destroy_subscription(odom_sub)
-        executor.remove_node(node)
 
     return result
 
@@ -392,9 +374,6 @@ def assert_vehicle_in_region(
     Returns:
         True if vehicle is within bounds
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     if odom_topic is None:
         odom_topic = f"/{vehicle_id}/odom"
 
@@ -414,9 +393,7 @@ def assert_vehicle_in_region(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    odom_sub = node.create_subscription(Odometry, odom_topic, odom_callback, qos)
-
-    try:
+    with managed_subscription(node, Odometry, odom_topic, odom_callback, qos) as executor:
         start_time = time.monotonic()
         while position is None and time.monotonic() - start_time < timeout_sec:
             executor.spin_once(timeout_sec=0.01)
@@ -429,10 +406,6 @@ def assert_vehicle_in_region(
             min_bounds[1] <= position[1] <= max_bounds[1] and
             min_bounds[2] <= position[2] <= max_bounds[2]
         )
-
-    finally:
-        node.destroy_subscription(odom_sub)
-        executor.remove_node(node)
 
 
 def assert_vehicle_orientation(
@@ -457,9 +430,6 @@ def assert_vehicle_orientation(
     Returns:
         True if orientation is within tolerance
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     if odom_topic is None:
         odom_topic = f"/{vehicle_id}/odom"
 
@@ -475,10 +445,8 @@ def assert_vehicle_orientation(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    odom_sub = node.create_subscription(Odometry, odom_topic, odom_callback, qos)
-
     result = False
-    try:
+    with managed_subscription(node, Odometry, odom_topic, odom_callback, qos) as executor:
         start_time = time.monotonic()
         while current_yaw is None and time.monotonic() - start_time < timeout_sec:
             executor.spin_once(timeout_sec=0.01)
@@ -494,10 +462,6 @@ def assert_vehicle_orientation(
                 diff += 2 * math.pi
 
             result = abs(diff) <= tolerance_rad
-
-    finally:
-        node.destroy_subscription(odom_sub)
-        executor.remove_node(node)
 
     return result
 

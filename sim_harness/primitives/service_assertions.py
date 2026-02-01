@@ -13,10 +13,11 @@ from typing import Any, List, Optional, Tuple, Type, TypeVar
 
 import rclpy
 from rclpy.node import Node
-from rclpy.executors import SingleThreadedExecutor
 from rclpy.action import ActionClient
 
 from rcl_interfaces.srv import GetParameters
+
+from sim_harness.core.spin_helpers import temporary_node
 
 
 @dataclass
@@ -62,12 +63,6 @@ def assert_service_available(
         - call_succeeded: Same as available (availability check succeeded)
         - response_time_ms: Time to discover the service
     """
-    temp_node = rclpy.create_node(f"service_checker_{int(time.time() * 1000) % 10000}")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp_node)
-
-    client = temp_node.create_client(service_type, service_name)
-
     result = ServiceResult(
         available=False,
         call_succeeded=False,
@@ -75,21 +70,22 @@ def assert_service_available(
         details=""
     )
 
-    try:
-        start_time = time.monotonic()
-        result.available = client.wait_for_service(timeout_sec=timeout_sec)
-        result.response_time_ms = (time.monotonic() - start_time) * 1000
-        result.call_succeeded = result.available
+    with temporary_node("service_checker") as (temp_node, executor):
+        client = temp_node.create_client(service_type, service_name)
 
-        if result.available:
-            result.details = f"Service {service_name} available in {result.response_time_ms:.0f}ms"
-        else:
-            result.details = f"Service {service_name} not available after {timeout_sec}s"
+        try:
+            start_time = time.monotonic()
+            result.available = client.wait_for_service(timeout_sec=timeout_sec)
+            result.response_time_ms = (time.monotonic() - start_time) * 1000
+            result.call_succeeded = result.available
 
-    finally:
-        temp_node.destroy_client(client)
-        executor.remove_node(temp_node)
-        temp_node.destroy_node()
+            if result.available:
+                result.details = f"Service {service_name} available in {result.response_time_ms:.0f}ms"
+            else:
+                result.details = f"Service {service_name} not available after {timeout_sec}s"
+
+        finally:
+            temp_node.destroy_client(client)
 
     return result
 
@@ -117,12 +113,6 @@ def assert_action_server_available(
         - call_succeeded: Same as available (availability check succeeded)
         - response_time_ms: Time to discover the action server
     """
-    temp_node = rclpy.create_node(f"action_checker_{int(time.time() * 1000) % 10000}")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp_node)
-
-    action_client = ActionClient(temp_node, action_type, action_name)
-
     result = ServiceResult(
         available=False,
         call_succeeded=False,
@@ -130,21 +120,22 @@ def assert_action_server_available(
         details=""
     )
 
-    try:
-        start_time = time.monotonic()
-        result.available = action_client.wait_for_server(timeout_sec=timeout_sec)
-        result.response_time_ms = (time.monotonic() - start_time) * 1000
-        result.call_succeeded = result.available
+    with temporary_node("action_checker") as (temp_node, executor):
+        action_client = ActionClient(temp_node, action_type, action_name)
 
-        if result.available:
-            result.details = f"Action server {action_name} available in {result.response_time_ms:.0f}ms"
-        else:
-            result.details = f"Action server {action_name} not available after {timeout_sec}s"
+        try:
+            start_time = time.monotonic()
+            result.available = action_client.wait_for_server(timeout_sec=timeout_sec)
+            result.response_time_ms = (time.monotonic() - start_time) * 1000
+            result.call_succeeded = result.available
 
-    finally:
-        action_client.destroy()
-        executor.remove_node(temp_node)
-        temp_node.destroy_node()
+            if result.available:
+                result.details = f"Action server {action_name} available in {result.response_time_ms:.0f}ms"
+            else:
+                result.details = f"Action server {action_name} not available after {timeout_sec}s"
+
+        finally:
+            action_client.destroy()
 
     return result
 
@@ -169,18 +160,13 @@ def assert_node_running(
     """
     service_name = f"/{target_node_name}/get_parameters"
 
-    temp_node = rclpy.create_node(f"node_checker_{int(time.time() * 1000) % 10000}")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp_node)
+    with temporary_node("node_checker") as (temp_node, executor):
+        client = temp_node.create_client(GetParameters, service_name)
 
-    client = temp_node.create_client(GetParameters, service_name)
-
-    try:
-        return client.wait_for_service(timeout_sec=timeout_sec)
-    finally:
-        temp_node.destroy_client(client)
-        executor.remove_node(temp_node)
-        temp_node.destroy_node()
+        try:
+            return client.wait_for_service(timeout_sec=timeout_sec)
+        finally:
+            temp_node.destroy_client(client)
 
 
 def assert_nodes_running(
@@ -237,57 +223,53 @@ def assert_parameter_exists(
     Returns:
         True if parameter exists (and matches value if specified for simple types)
     """
-    temp_node = rclpy.create_node(f"param_checker_{int(time.time() * 1000) % 10000}")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp_node)
-
     service_name = f"/{target_node_name}/get_parameters"
-    client = temp_node.create_client(GetParameters, service_name)
 
-    try:
-        if not client.wait_for_service(timeout_sec=timeout_sec):
-            return False
+    with temporary_node("param_checker") as (temp_node, executor):
+        client = temp_node.create_client(GetParameters, service_name)
 
-        request = GetParameters.Request()
-        request.names = [parameter_name]
-
-        future = client.call_async(request)
-
-        start_time = time.monotonic()
-        while not future.done():
-            executor.spin_once(timeout_sec=0.1)
-            if time.monotonic() - start_time > timeout_sec:
+        try:
+            if not client.wait_for_service(timeout_sec=timeout_sec):
                 return False
 
-        response = future.result()
-        if response is None or len(response.values) == 0:
-            return False
+            request = GetParameters.Request()
+            request.names = [parameter_name]
 
-        param_value = response.values[0]
+            future = client.call_async(request)
 
-        # Check if parameter was found (not NOT_SET)
-        if param_value.type == 0:  # PARAMETER_NOT_SET
-            return False
+            start_time = time.monotonic()
+            while not future.done():
+                executor.spin_once(timeout_sec=0.1)
+                if time.monotonic() - start_time > timeout_sec:
+                    return False
 
-        # If expected_value specified, compare
-        if expected_value is not None:
-            # Extract actual value based on type
-            if param_value.type == 1:  # BOOL
-                actual = param_value.bool_value
-            elif param_value.type == 2:  # INTEGER
-                actual = param_value.integer_value
-            elif param_value.type == 3:  # DOUBLE
-                actual = param_value.double_value
-            elif param_value.type == 4:  # STRING
-                actual = param_value.string_value
-            else:
-                return True  # Parameter exists but can't compare complex types
+            response = future.result()
+            if response is None or len(response.values) == 0:
+                return False
 
-            return actual == expected_value
+            param_value = response.values[0]
 
-        return True
+            # Check if parameter was found (not NOT_SET)
+            if param_value.type == 0:  # PARAMETER_NOT_SET
+                return False
 
-    finally:
-        temp_node.destroy_client(client)
-        executor.remove_node(temp_node)
-        temp_node.destroy_node()
+            # If expected_value specified, compare
+            if expected_value is not None:
+                # Extract actual value based on type
+                if param_value.type == 1:  # BOOL
+                    actual = param_value.bool_value
+                elif param_value.type == 2:  # INTEGER
+                    actual = param_value.integer_value
+                elif param_value.type == 3:  # DOUBLE
+                    actual = param_value.double_value
+                elif param_value.type == 4:  # STRING
+                    actual = param_value.string_value
+                else:
+                    return True  # Parameter exists but can't compare complex types
+
+                return actual == expected_value
+
+            return True
+
+        finally:
+            temp_node.destroy_client(client)

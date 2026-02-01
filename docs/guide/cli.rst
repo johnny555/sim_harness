@@ -361,15 +361,31 @@ The CLI is designed for easy integration with CI/CD systems.
 
 **GitHub Actions Example:**
 
+A full CI workflow is provided in ``.github/workflows/ci.yml``. A minimal
+example for running tests in a headless environment:
+
 .. code-block:: yaml
 
-   - name: Run tests
+   - name: Run unit tests
      run: |
        source install/setup.bash
        ros2 test run --junit-xml test-results.xml
 
+   - name: Run integration tests (headless Gazebo)
+     env:
+       DISPLAY: ":99"
+       GAZEBO_HEADLESS: "1"
+       LIBGL_ALWAYS_SOFTWARE: "1"
+     run: |
+       Xvfb :99 -screen 0 1024x768x24 &
+       sleep 2
+       source install/setup.bash
+       colcon test --packages-select sim_harness \
+         --ctest-args -R 'integration' \
+         --parallel-workers 1
+
    - name: Upload test results
-     uses: actions/upload-artifact@v3
+     uses: actions/upload-artifact@v4
      with:
        name: test-results
        path: test-results.xml
