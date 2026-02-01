@@ -13,13 +13,12 @@ from typing import List, Optional, Type, TypeVar
 
 import rclpy
 from rclpy.node import Node
-from rclpy.executors import SingleThreadedExecutor
 from rclpy.action import ActionClient
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 from builtin_interfaces.msg import Time as TimeMsg
 
-from sim_harness.core.spin_helpers import spin_for_duration
+from sim_harness.core.spin_helpers import managed_subscription, temporary_node, spin_for_duration
 
 MsgT = TypeVar('MsgT')
 
@@ -78,9 +77,6 @@ def assert_publish_rate(
           intervals (stored in min_latency_ms, max_latency_ms, avg_latency_ms
           fields for API compatibility)
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     message_times: List[float] = []
 
     def callback(msg):
@@ -92,13 +88,8 @@ def assert_publish_rate(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    sub = node.create_subscription(msg_type, topic, callback, qos)
-
-    try:
+    with managed_subscription(node, msg_type, topic, callback, qos) as executor:
         spin_for_duration(executor, sample_duration_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
 
     result = TimingResult(
         within_bounds=False,
@@ -176,9 +167,6 @@ def assert_latency(
         messages lack timestamps, returns with details "No messages with
         timestamps received".
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     latencies: List[float] = []
 
     def callback(msg):
@@ -194,13 +182,8 @@ def assert_latency(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    sub = node.create_subscription(msg_type, topic, callback, qos)
-
-    try:
+    with managed_subscription(node, msg_type, topic, callback, qos) as executor:
         spin_for_duration(executor, sample_duration_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
 
     result = TimingResult(
         within_bounds=False,
@@ -253,14 +236,10 @@ def assert_transform_available(
     """
     from tf2_ros import Buffer, TransformListener
 
-    temp_node = rclpy.create_node(f"tf_checker_{int(time.time() * 1000) % 10000}")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp_node)
+    with temporary_node("tf_checker") as (temp_node, executor):
+        tf_buffer = Buffer()
+        tf_listener = TransformListener(tf_buffer, temp_node)
 
-    tf_buffer = Buffer()
-    tf_listener = TransformListener(tf_buffer, temp_node)
-
-    try:
         start_time = time.monotonic()
 
         while time.monotonic() - start_time < timeout_sec:
@@ -286,10 +265,6 @@ def assert_transform_available(
 
         return False
 
-    finally:
-        executor.remove_node(temp_node)
-        temp_node.destroy_node()
-
 
 def assert_action_server_responsive(
     node: Node,
@@ -309,20 +284,15 @@ def assert_action_server_responsive(
     Returns:
         True if server responds within timeout
     """
-    temp_node = rclpy.create_node(f"action_latency_checker_{int(time.time() * 1000) % 10000}")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp_node)
+    with temporary_node("action_latency_checker") as (temp_node, executor):
+        action_client = ActionClient(temp_node, action_type, action_name)
 
-    action_client = ActionClient(temp_node, action_type, action_name)
+        try:
+            start_time = time.monotonic()
+            available = action_client.wait_for_server(timeout_sec=max_response_time_ms / 1000.0)
+            response_time_ms = (time.monotonic() - start_time) * 1000
 
-    try:
-        start_time = time.monotonic()
-        available = action_client.wait_for_server(timeout_sec=max_response_time_ms / 1000.0)
-        response_time_ms = (time.monotonic() - start_time) * 1000
+            return available and response_time_ms <= max_response_time_ms
 
-        return available and response_time_ms <= max_response_time_ms
-
-    finally:
-        action_client.destroy()
-        executor.remove_node(temp_node)
-        temp_node.destroy_node()
+        finally:
+            action_client.destroy()

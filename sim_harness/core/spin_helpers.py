@@ -4,11 +4,13 @@
 """
 Spin helpers for ROS 2 executor management.
 
-Provides utility functions for spinning executors with timeouts and conditions.
+Provides utility functions for spinning executors with timeouts and conditions,
+plus context managers that eliminate boilerplate executor/subscription lifecycle code.
 """
 
 import time
-from typing import Callable, Optional
+from contextlib import contextmanager
+from typing import Callable, Optional, Tuple
 
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
@@ -138,4 +140,59 @@ def spin_node_until_condition(
     try:
         return spin_until_condition(executor, condition, timeout_sec, spin_interval_sec)
     finally:
+        executor.remove_node(node)
+
+
+@contextmanager
+def temporary_node(name_prefix: str):
+    """Create a short-lived ROS 2 node with its own executor.
+
+    Generates a unique node name from *name_prefix* and the current
+    millisecond timestamp, creates a ``SingleThreadedExecutor``, and
+    tears both down on exit.
+
+    Yields:
+        (node, executor) tuple.
+
+    Example::
+
+        with temporary_node("service_checker") as (node, executor):
+            client = node.create_client(GetState, "/my_node/get_state")
+            ...
+    """
+    node = rclpy.create_node(f"{name_prefix}_{int(time.time() * 1000) % 10000}")
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    try:
+        yield node, executor
+    finally:
+        executor.remove_node(node)
+        node.destroy_node()
+
+
+@contextmanager
+def managed_subscription(node: Node, msg_type, topic: str, callback, qos):
+    """Subscribe to a topic and manage the executor/subscription lifecycle.
+
+    Creates a ``SingleThreadedExecutor``, adds *node* to it, creates the
+    subscription, and tears everything down on exit.
+
+    Yields:
+        The executor (so callers can ``spin_once`` / ``spin_for_duration``).
+
+    Example::
+
+        messages = []
+        qos = QoSProfile(depth=10, ...)
+        with managed_subscription(node, LaserScan, "/scan", messages.append, qos) as executor:
+            spin_for_duration(executor, 5.0)
+        # subscription destroyed, node removed from executor
+    """
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    sub = node.create_subscription(msg_type, topic, callback, qos)
+    try:
+        yield executor
+    finally:
+        node.destroy_subscription(sub)
         executor.remove_node(node)

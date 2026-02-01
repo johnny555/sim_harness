@@ -14,12 +14,11 @@ from typing import List, Optional
 
 import rclpy
 from rclpy.node import Node
-from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 from sensor_msgs.msg import PointCloud2, NavSatFix, Imu, Image, JointState, LaserScan
 
-from sim_harness.core.spin_helpers import spin_for_duration
+from sim_harness.core.spin_helpers import managed_subscription, spin_for_duration
 
 
 @dataclass
@@ -64,9 +63,6 @@ def assert_sensor_publishing(
     Returns:
         SensorDataResult with publish rate info
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     message_count = 0
 
     def callback(msg):
@@ -80,18 +76,8 @@ def assert_sensor_publishing(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    sub = node.create_subscription(
-        msg_type,
-        topic,
-        callback,
-        qos
-    )
-
-    try:
+    with managed_subscription(node, msg_type, topic, callback, qos) as executor:
         spin_for_duration(executor, sample_duration_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
 
     # Calculate rate
     publish_rate = message_count / sample_duration_sec if sample_duration_sec > 0 else 0
@@ -145,9 +131,6 @@ def assert_lidar_valid(
     Returns:
         SensorDataResult with validation status and point statistics
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     messages: List[LaserScan] = []
 
     def callback(msg: LaserScan):
@@ -159,13 +142,8 @@ def assert_lidar_valid(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    sub = node.create_subscription(LaserScan, topic, callback, qos)
-
-    try:
+    with managed_subscription(node, LaserScan, topic, callback, qos) as executor:
         spin_for_duration(executor, timeout_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
 
     if not messages:
         return SensorDataResult(
@@ -239,9 +217,6 @@ def assert_gps_valid(
     Returns:
         SensorDataResult
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     messages: List[NavSatFix] = []
 
     def callback(msg: NavSatFix):
@@ -253,13 +228,8 @@ def assert_gps_valid(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    sub = node.create_subscription(NavSatFix, topic, callback, qos)
-
-    try:
+    with managed_subscription(node, NavSatFix, topic, callback, qos) as executor:
         spin_for_duration(executor, timeout_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
 
     if not messages:
         return SensorDataResult(
@@ -327,9 +297,6 @@ def assert_imu_valid(
     Returns:
         SensorDataResult
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     messages: List[Imu] = []
 
     def callback(msg: Imu):
@@ -341,13 +308,8 @@ def assert_imu_valid(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    sub = node.create_subscription(Imu, topic, callback, qos)
-
-    try:
+    with managed_subscription(node, Imu, topic, callback, qos) as executor:
         spin_for_duration(executor, timeout_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
 
     if not messages:
         return SensorDataResult(
@@ -432,9 +394,6 @@ def assert_camera_valid(
     Returns:
         SensorDataResult
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     messages: List[Image] = []
 
     def callback(msg: Image):
@@ -446,13 +405,8 @@ def assert_camera_valid(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    sub = node.create_subscription(Image, topic, callback, qos)
-
-    try:
+    with managed_subscription(node, Image, topic, callback, qos) as executor:
         spin_for_duration(executor, timeout_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
 
     if not messages:
         return SensorDataResult(
@@ -515,9 +469,6 @@ def assert_joint_states_valid(
     Returns:
         SensorDataResult
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
     messages: List[JointState] = []
 
     def callback(msg: JointState):
@@ -529,13 +480,8 @@ def assert_joint_states_valid(
         durability=DurabilityPolicy.VOLATILE
     )
 
-    sub = node.create_subscription(JointState, topic, callback, qos)
-
-    try:
+    with managed_subscription(node, JointState, topic, callback, qos) as executor:
         spin_for_duration(executor, timeout_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
 
     if not messages:
         return SensorDataResult(

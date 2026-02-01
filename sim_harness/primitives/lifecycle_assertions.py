@@ -14,10 +14,11 @@ from typing import List, Optional
 
 import rclpy
 from rclpy.node import Node
-from rclpy.executors import SingleThreadedExecutor
 
 from lifecycle_msgs.srv import GetState
 from lifecycle_msgs.msg import State
+
+from sim_harness.core.spin_helpers import temporary_node, managed_subscription
 
 
 class LifecycleState(IntEnum):
@@ -139,66 +140,61 @@ def assert_lifecycle_node_state(
         LifecycleResult with current state and timing information
     """
     # Create a temporary node for service calls to avoid executor conflicts
-    temp_node = rclpy.create_node(f"lifecycle_checker_{int(time.time() * 1000) % 10000}")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp_node)
+    with temporary_node("lifecycle_checker") as (temp_node, executor):
+        service_name = f"/{lifecycle_node_name}/get_state"
+        client = temp_node.create_client(GetState, service_name)
 
-    service_name = f"/{lifecycle_node_name}/get_state"
-    client = temp_node.create_client(GetState, service_name)
-
-    result = LifecycleResult(
-        success=False,
-        current_state=LifecycleState.UNKNOWN,
-        time_to_reach_ms=0.0,
-        details=""
-    )
-
-    try:
-        start_time = time.monotonic()
-
-        # Wait for service to be available
-        while not client.wait_for_service(timeout_sec=1.0):
-            if time.monotonic() - start_time > timeout_sec:
-                result.details = f"Service {service_name} not available"
-                return result
-            executor.spin_once(timeout_sec=0.1)
-
-        # Poll state until expected or timeout
-        while time.monotonic() - start_time < timeout_sec:
-            request = GetState.Request()
-            future = client.call_async(request)
-
-            # Wait for response
-            while not future.done():
-                executor.spin_once(timeout_sec=0.1)
-                if time.monotonic() - start_time > timeout_sec:
-                    break
-
-            if future.done():
-                response = future.result()
-                if response is not None:
-                    result.current_state = LifecycleState(response.current_state.id)
-
-                    if result.current_state == expected_state:
-                        result.success = True
-                        result.time_to_reach_ms = (time.monotonic() - start_time) * 1000
-                        result.details = f"Node {lifecycle_node_name} reached {lifecycle_state_to_string(expected_state)}"
-                        return result
-
-            time.sleep(0.1)
-
-        result.time_to_reach_ms = (time.monotonic() - start_time) * 1000
-        result.details = (
-            f"Node {lifecycle_node_name} in state {lifecycle_state_to_string(result.current_state)}, "
-            f"expected {lifecycle_state_to_string(expected_state)}"
+        result = LifecycleResult(
+            success=False,
+            current_state=LifecycleState.UNKNOWN,
+            time_to_reach_ms=0.0,
+            details=""
         )
 
-    finally:
-        temp_node.destroy_client(client)
-        executor.remove_node(temp_node)
-        temp_node.destroy_node()
+        try:
+            start_time = time.monotonic()
 
-    return result
+            # Wait for service to be available
+            while not client.wait_for_service(timeout_sec=1.0):
+                if time.monotonic() - start_time > timeout_sec:
+                    result.details = f"Service {service_name} not available"
+                    return result
+                executor.spin_once(timeout_sec=0.1)
+
+            # Poll state until expected or timeout
+            while time.monotonic() - start_time < timeout_sec:
+                request = GetState.Request()
+                future = client.call_async(request)
+
+                # Wait for response
+                while not future.done():
+                    executor.spin_once(timeout_sec=0.1)
+                    if time.monotonic() - start_time > timeout_sec:
+                        break
+
+                if future.done():
+                    response = future.result()
+                    if response is not None:
+                        result.current_state = LifecycleState(response.current_state.id)
+
+                        if result.current_state == expected_state:
+                            result.success = True
+                            result.time_to_reach_ms = (time.monotonic() - start_time) * 1000
+                            result.details = f"Node {lifecycle_node_name} reached {lifecycle_state_to_string(expected_state)}"
+                            return result
+
+                time.sleep(0.1)
+
+            result.time_to_reach_ms = (time.monotonic() - start_time) * 1000
+            result.details = (
+                f"Node {lifecycle_node_name} in state {lifecycle_state_to_string(result.current_state)}, "
+                f"expected {lifecycle_state_to_string(expected_state)}"
+            )
+
+        finally:
+            temp_node.destroy_client(client)
+
+        return result
 
 
 def assert_lifecycle_nodes_active(
@@ -254,59 +250,54 @@ def assert_controller_active(
     """
     from controller_manager_msgs.srv import ListControllers
 
-    temp_node = rclpy.create_node(f"controller_checker_{int(time.time() * 1000) % 10000}")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp_node)
+    with temporary_node("controller_checker") as (temp_node, executor):
+        service_name = f"/{controller_manager_name}/list_controllers"
+        client = temp_node.create_client(ListControllers, service_name)
 
-    service_name = f"/{controller_manager_name}/list_controllers"
-    client = temp_node.create_client(ListControllers, service_name)
+        result = ControllerResult(
+            success=False,
+            controller_name=controller_name,
+            state="unknown",
+            details=""
+        )
 
-    result = ControllerResult(
-        success=False,
-        controller_name=controller_name,
-        state="unknown",
-        details=""
-    )
+        try:
+            start_time = time.monotonic()
 
-    try:
-        start_time = time.monotonic()
-
-        while not client.wait_for_service(timeout_sec=1.0):
-            if time.monotonic() - start_time > timeout_sec:
-                result.details = f"Service {service_name} not available"
-                return result
-            executor.spin_once(timeout_sec=0.1)
-
-        while time.monotonic() - start_time < timeout_sec:
-            request = ListControllers.Request()
-            future = client.call_async(request)
-
-            while not future.done():
-                executor.spin_once(timeout_sec=0.1)
+            while not client.wait_for_service(timeout_sec=1.0):
                 if time.monotonic() - start_time > timeout_sec:
-                    break
+                    result.details = f"Service {service_name} not available"
+                    return result
+                executor.spin_once(timeout_sec=0.1)
 
-            if future.done():
-                response = future.result()
-                if response is not None:
-                    for ctrl in response.controller:
-                        if ctrl.name == controller_name:
-                            result.state = ctrl.state
-                            if ctrl.state == "active":
-                                result.success = True
-                                result.details = f"Controller {controller_name} is active"
-                                return result
+            while time.monotonic() - start_time < timeout_sec:
+                request = ListControllers.Request()
+                future = client.call_async(request)
 
-            time.sleep(0.1)
+                while not future.done():
+                    executor.spin_once(timeout_sec=0.1)
+                    if time.monotonic() - start_time > timeout_sec:
+                        break
 
-        result.details = f"Controller {controller_name} state: {result.state}"
+                if future.done():
+                    response = future.result()
+                    if response is not None:
+                        for ctrl in response.controller:
+                            if ctrl.name == controller_name:
+                                result.state = ctrl.state
+                                if ctrl.state == "active":
+                                    result.success = True
+                                    result.details = f"Controller {controller_name} is active"
+                                    return result
 
-    finally:
-        temp_node.destroy_client(client)
-        executor.remove_node(temp_node)
-        temp_node.destroy_node()
+                time.sleep(0.1)
 
-    return result
+            result.details = f"Controller {controller_name} state: {result.state}"
+
+        finally:
+            temp_node.destroy_client(client)
+
+        return result
 
 
 def assert_controllers_active(
@@ -358,19 +349,14 @@ def assert_controller_manager_available(
     """
     from controller_manager_msgs.srv import ListControllers
 
-    temp_node = rclpy.create_node(f"cm_checker_{int(time.time() * 1000) % 10000}")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp_node)
+    with temporary_node("cm_checker") as (temp_node, executor):
+        service_name = f"/{controller_manager_name}/list_controllers"
+        client = temp_node.create_client(ListControllers, service_name)
 
-    service_name = f"/{controller_manager_name}/list_controllers"
-    client = temp_node.create_client(ListControllers, service_name)
-
-    try:
-        return client.wait_for_service(timeout_sec=timeout_sec)
-    finally:
-        temp_node.destroy_client(client)
-        executor.remove_node(temp_node)
-        temp_node.destroy_node()
+        try:
+            return client.wait_for_service(timeout_sec=timeout_sec)
+        finally:
+            temp_node.destroy_client(client)
 
 
 def assert_nav2_active(
@@ -469,46 +455,41 @@ def assert_localization_active(
         return result
 
     # Check covariance
-    temp_node = rclpy.create_node(f"localization_checker_{int(time.time() * 1000) % 10000}")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp_node)
+    with temporary_node("localization_checker") as (temp_node, executor):
+        pose_msg: Optional[PoseWithCovarianceStamped] = None
 
-    pose_msg: Optional[PoseWithCovarianceStamped] = None
+        def callback(msg: PoseWithCovarianceStamped):
+            nonlocal pose_msg
+            pose_msg = msg
 
-    def callback(msg: PoseWithCovarianceStamped):
-        nonlocal pose_msg
-        pose_msg = msg
+        qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE
+        )
 
-    qos = QoSProfile(
-        depth=1,
-        reliability=ReliabilityPolicy.RELIABLE,
-        durability=DurabilityPolicy.VOLATILE
-    )
+        sub = temp_node.create_subscription(
+            PoseWithCovarianceStamped,
+            pose_topic,
+            callback,
+            qos
+        )
 
-    sub = temp_node.create_subscription(
-        PoseWithCovarianceStamped,
-        pose_topic,
-        callback,
-        qos
-    )
+        try:
+            start_time = time.monotonic()
+            while pose_msg is None and time.monotonic() - start_time < 5.0:
+                executor.spin_once(timeout_sec=0.1)
 
-    try:
-        start_time = time.monotonic()
-        while pose_msg is None and time.monotonic() - start_time < 5.0:
-            executor.spin_once(timeout_sec=0.1)
+            if pose_msg is not None:
+                # Calculate covariance trace (diagonal elements: xx, yy, zz, roll, pitch, yaw)
+                cov = pose_msg.pose.covariance
+                result.covariance_trace = cov[0] + cov[7] + cov[35]  # xx, yy, yaw
+                result.converged = result.covariance_trace <= max_covariance_trace
+                result.details = f"Covariance trace: {result.covariance_trace:.4f}"
+            else:
+                result.details = "No pose received from AMCL"
 
-        if pose_msg is not None:
-            # Calculate covariance trace (diagonal elements: xx, yy, zz, roll, pitch, yaw)
-            cov = pose_msg.pose.covariance
-            result.covariance_trace = cov[0] + cov[7] + cov[35]  # xx, yy, yaw
-            result.converged = result.covariance_trace <= max_covariance_trace
-            result.details = f"Covariance trace: {result.covariance_trace:.4f}"
-        else:
-            result.details = "No pose received from AMCL"
-
-    finally:
-        temp_node.destroy_subscription(sub)
-        executor.remove_node(temp_node)
-        temp_node.destroy_node()
+        finally:
+            temp_node.destroy_subscription(sub)
 
     return result
