@@ -40,9 +40,67 @@ For faster development:
 Headless Mode
 -------------
 
+sim_harness supports headless operation for CI/CD environments where no
+physical display is available (e.g., GitHub Actions, Docker containers).
+
+**Via environment variable:**
+
 .. code-block:: bash
 
    GAZEBO_HEADLESS=1 pytest tests/ -v
+
+**Via launch argument:**
+
+.. code-block:: bash
+
+   ros2 launch sim_harness turtlebot3_test.launch.py headless:=true
+
+**In GitHub Actions (with Xvfb virtual framebuffer):**
+
+.. code-block:: yaml
+
+   - name: Run integration tests (headless)
+     env:
+       DISPLAY: ":99"
+       GAZEBO_HEADLESS: "1"
+       LIBGL_ALWAYS_SOFTWARE: "1"
+     run: |
+       Xvfb :99 -screen 0 1024x768x24 &
+       sleep 2
+       source install/setup.bash
+       colcon test --packages-select sim_harness \
+         --ctest-args -R 'integration' \
+         --parallel-workers 1
+
+Gazebo's ``-s`` flag runs in server-only mode (no gzclient GUI), which is
+the most reliable approach for CI. Xvfb provides a virtual display for any
+rendering dependencies that still require a DISPLAY variable.
+
+**SimulatorConfig default:**
+
+The ``SimulatorConfig.headless`` field defaults to ``True``, so programmatic
+simulator launches are headless by default.
+
+Launch Utilities
+----------------
+
+Common launch-file helpers (domain ID generation, Gazebo partition naming,
+environment setup) are available in ``sim_harness.launch_utils``:
+
+.. code-block:: python
+
+   from sim_harness.launch_utils import (
+       get_unique_domain_id,
+       get_gz_partition,
+       create_isolation_env_actions,
+   )
+
+   domain_id = get_unique_domain_id()
+   gz_partition = get_gz_partition(domain_id)
+   env_actions = create_isolation_env_actions(
+       domain_id, gz_partition,
+       localhost_only=True,
+   )
 
 Gazebo Ground Truth
 -------------------

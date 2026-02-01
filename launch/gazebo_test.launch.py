@@ -22,7 +22,6 @@ Usage in consumer packages:
 """
 
 import os
-import random
 import unittest
 
 from launch import LaunchDescription
@@ -47,16 +46,11 @@ from launch_testing.actions import ReadyToTest
 
 import launch_testing
 
-
-def get_unique_domain_id():
-    """Generate a unique ROS_DOMAIN_ID for test isolation."""
-    # Use random ID between 1-232 to avoid conflicts
-    return str(random.randint(1, 232))
-
-
-def get_gz_partition(domain_id: str) -> str:
-    """Generate GZ_PARTITION from domain ID for Gazebo isolation."""
-    return f"gz_test_{domain_id}"
+from sim_harness.launch_utils import (
+    get_unique_domain_id,
+    get_gz_partition,
+    create_isolation_env_actions,
+)
 
 
 def generate_gazebo_test_description(
@@ -87,10 +81,7 @@ def generate_gazebo_test_description(
     gz_partition = get_gz_partition(domain_id)
 
     # Environment setup for isolation
-    env_actions = [
-        SetEnvironmentVariable("ROS_DOMAIN_ID", domain_id),
-        SetEnvironmentVariable("GZ_PARTITION", gz_partition),
-    ]
+    env_actions = create_isolation_env_actions(domain_id, gz_partition)
 
     # Add any extra environment variables
     if extra_env:
