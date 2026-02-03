@@ -6,7 +6,7 @@ sim_harness — Python test utilities for ROS 2 simulation testing.
 
 Quick start::
 
-    from sim_harness import SimTestFixture, assert_lidar_valid, assert_nav2_active
+    from sim_harness import SimTestFixture, assert_lidar_valid
 
     class TestMyRobot(SimTestFixture):
         LAUNCH_PACKAGE = 'my_robot_sim'
@@ -16,9 +16,10 @@ Quick start::
             result = assert_lidar_valid(self.node, '/scan')
             assert result.valid, result.details
 
-Assertions are grouped by purpose below. For composable predicates
-see ``sim_harness.core.predicates``. For building custom checks
-see ``sim_harness.core.topic_observer``.
+Extensions for specialized stacks::
+
+    from sim_harness.nav2 import assert_nav2_active, assert_reaches_goal
+    from sim_harness.perception import assert_object_detected
 """
 
 # ── Core fixture ──────────────────────────────────────────────────────────
@@ -65,7 +66,7 @@ from sim_harness.validation.requirement_validator import (  # noqa: F401
     RequirementValidator,
 )
 
-# ── Readiness checks — "Is the system up?" ────────────────────────────────
+# ── Service checks — "Is this node / service / parameter up?" ─────────────
 from sim_harness.primitives.service_assertions import (  # noqa: F401
     ServiceResult,
     assert_service_available,
@@ -74,26 +75,8 @@ from sim_harness.primitives.service_assertions import (  # noqa: F401
     assert_nodes_running,
     assert_parameter_exists,
 )
-from sim_harness.primitives.lifecycle_assertions import (  # noqa: F401
-    LifecycleState,
-    LifecycleResult,
-    ControllerResult,
-    LocalizationResult,
-    assert_lifecycle_node_active,
-    assert_lifecycle_node_state,
-    assert_lifecycle_nodes_active,
-    assert_controller_active,
-    assert_controllers_active,
-    assert_controller_manager_available,
-    assert_nav2_active,
-    assert_slam_toolbox_active,
-    assert_localization_active,
-)
-from sim_harness.primitives.timing_assertions import (  # noqa: F401
-    assert_action_server_responsive,
-)
 
-# ── Sensor checks — "Are sensors working?" ────────────────────────────────
+# ── Sensor checks — "Are sensors publishing valid data?" ──────────────────
 from sim_harness.primitives.sensor_assertions import (  # noqa: F401
     SensorDataResult,
     assert_sensor_publishing,
@@ -103,11 +86,12 @@ from sim_harness.primitives.sensor_assertions import (  # noqa: F401
     assert_camera_valid,
     assert_joint_states_valid,
 )
-from sim_harness.primitives.timing_assertions import (  # noqa: F401, E811
+from sim_harness.primitives.timing_assertions import (  # noqa: F401
     TimingResult,
     assert_publish_rate,
     assert_latency,
     assert_transform_available,
+    assert_action_server_responsive,
 )
 
 # ── Motion checks — "Does the robot move?" ────────────────────────────────
@@ -122,36 +106,8 @@ from sim_harness.primitives.vehicle_assertions import (  # noqa: F401
     assert_vehicle_orientation,
 )
 
-# ── Navigation checks — "Can it navigate?" ────────────────────────────────
-from sim_harness.primitives.navigation_assertions import (  # noqa: F401
-    NavigationResult,
-    assert_reaches_goal,
-    assert_follows_path,
-    assert_navigation_action_succeeds,
-    assert_costmap_contains_obstacle,
-)
-
-# ── Perception checks — "Does it see the world?" ──────────────────────────
-from sim_harness.primitives.perception_assertions import (  # noqa: F401
-    DetectionResult,
-    assert_object_detected,
-    assert_object_detected_by_class,
-    assert_min_objects_detected,
-    assert_region_clear,
-)
-
 # ── Predicate combinators ─────────────────────────────────────────────────
 from sim_harness.core.predicates import all_of, any_of, negate  # noqa: F401
-
-# ── Readiness check framework ─────────────────────────────────────────────
-from sim_harness.core.readiness_check import (  # noqa: F401
-    ReadinessCheck,
-    CheckResult,
-    CheckItemResult,
-    CheckStatus,
-    CheckCategory,
-    create_standard_check,
-)
 
 # ── TopicObserver (for building custom checks) ─────────────────────────────
 from sim_harness.core.topic_observer import (  # noqa: F401
@@ -204,27 +160,13 @@ __all__ = [
     'ValidationResultCollector',
     'ValidationScope',
     'RequirementValidator',
-    # Readiness checks
+    # Service checks
     'ServiceResult',
     'assert_service_available',
     'assert_action_server_available',
-    'assert_action_server_responsive',
     'assert_node_running',
     'assert_nodes_running',
     'assert_parameter_exists',
-    'LifecycleState',
-    'LifecycleResult',
-    'ControllerResult',
-    'LocalizationResult',
-    'assert_lifecycle_node_active',
-    'assert_lifecycle_node_state',
-    'assert_lifecycle_nodes_active',
-    'assert_controller_active',
-    'assert_controllers_active',
-    'assert_controller_manager_available',
-    'assert_nav2_active',
-    'assert_slam_toolbox_active',
-    'assert_localization_active',
     # Sensor checks
     'SensorDataResult',
     'TimingResult',
@@ -237,6 +179,7 @@ __all__ = [
     'assert_publish_rate',
     'assert_latency',
     'assert_transform_available',
+    'assert_action_server_responsive',
     # Motion checks
     'MovementResult',
     'VelocityResult',
@@ -246,29 +189,10 @@ __all__ = [
     'assert_vehicle_velocity',
     'assert_vehicle_in_region',
     'assert_vehicle_orientation',
-    # Navigation checks
-    'NavigationResult',
-    'assert_reaches_goal',
-    'assert_follows_path',
-    'assert_navigation_action_succeeds',
-    'assert_costmap_contains_obstacle',
-    # Perception checks
-    'DetectionResult',
-    'assert_object_detected',
-    'assert_object_detected_by_class',
-    'assert_min_objects_detected',
-    'assert_region_clear',
     # Predicate combinators
     'all_of',
     'any_of',
     'negate',
-    # Readiness check framework
-    'ReadinessCheck',
-    'CheckResult',
-    'CheckItemResult',
-    'CheckStatus',
-    'CheckCategory',
-    'create_standard_check',
     # TopicObserver
     'TopicObserver',
     'ObservationResult',

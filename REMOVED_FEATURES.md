@@ -109,3 +109,25 @@ Demonstrated all three Hypothesis tiers:
   Example: "for any Twist command, odometry stays finite."
 
 **Why removed:** Depended entirely on the deleted Hypothesis infrastructure.
+
+## 7. Readiness Check Framework (`core/readiness_check.py` — 669 lines)
+
+A configurable checklist builder for verifying robot readiness before tests.
+
+- **`ReadinessCheck(node)`** — Builder that chains `.check_topics()`,
+  `.check_nodes()`, `.check_services()`, `.check_transforms()`,
+  `.check_lifecycle_nodes()`, `.check_controllers()`, `.check_custom()`,
+  then `.run()` to execute all checks with timeouts and produce a
+  `CheckResult`.
+- **`CheckResult`** — Aggregated result with pass/fail/skip counts,
+  `all_passed` flag, `failed_checks` list, and `by_category()` filter.
+- **`CheckCategory` enum** — TOPIC, NODE, SERVICE, TRANSFORM, LIFECYCLE,
+  CONTROLLER, CUSTOM.
+- **`create_standard_check()`** — Factory for common robot configs
+  (topics, nodes, services, transforms in one call).
+
+**Why removed:** Exported in `__init__.py` and documented, but never actually
+used by any test, example, or other module. Users preferred calling individual
+assertion functions (`assert_service_available`, `assert_lifecycle_node_active`,
+etc.) directly. The builder pattern added a layer of abstraction over
+functionality already available as simple function calls.
