@@ -5,25 +5,51 @@
 Composable predicates for ROS message validation.
 
 Each predicate is a function ``MsgT -> bool`` that can be combined
-with ``all_of``, ``any_of``, and ``negate`` from ``stream_properties``.
+with ``all_of``, ``any_of``, and ``negate``.
 
-Example:
+Example::
+
     from sim_harness.core.predicates import (
-        scan_has_min_points, scan_ranges_within, scan_nan_ratio_below,
+        all_of, scan_has_min_points, scan_ranges_within,
     )
-    from sim_harness.core.stream_properties import all_of, for_all_messages
 
     valid_lidar = all_of(
         scan_has_min_points(100),
         scan_ranges_within(0.1, 30.0),
-        scan_nan_ratio_below(0.05),
     )
-    result = for_all_messages(node, executor, "/scan", LaserScan,
-                              predicate=valid_lidar, timeout_sec=5.0)
+    assert valid_lidar(scan_msg)
 """
 
 import math
 from typing import Callable, List
+
+
+# ---------------------------------------------------------------------------
+# Predicate combinators
+# ---------------------------------------------------------------------------
+
+Predicate = Callable  # Callable[[MsgT], bool]
+
+
+def all_of(*predicates: Predicate) -> Predicate:
+    """All predicates must hold for a given message."""
+    def check(msg):
+        return all(p(msg) for p in predicates)
+    return check
+
+
+def any_of(*predicates: Predicate) -> Predicate:
+    """At least one predicate must hold."""
+    def check(msg):
+        return any(p(msg) for p in predicates)
+    return check
+
+
+def negate(predicate: Predicate) -> Predicate:
+    """Invert a predicate."""
+    def check(msg):
+        return not predicate(msg)
+    return check
 
 
 # ---------------------------------------------------------------------------

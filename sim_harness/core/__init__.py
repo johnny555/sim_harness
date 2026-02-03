@@ -4,11 +4,8 @@
 """
 Core test infrastructure for ROS 2 simulation testing.
 
-For check functions, prefer importing from ``sim_harness.checks.*``
-which organizes everything by purpose (readiness, sensors, motion,
-navigation, perception).
-
-This module re-exports the internal building blocks for advanced use.
+Provides the test fixture, message collection, spin helpers,
+topic observation, composable predicates, and readiness checks.
 """
 
 from sim_harness.core.test_fixture import SimTestFixture
@@ -43,9 +40,10 @@ from sim_harness.core.topic_observer import (
     track_max,
     track_timestamps,
 )
-from sim_harness.core.sim_property import (
-    sim_property,
-    PropertyFailure,
+from sim_harness.core.predicates import (
+    all_of,
+    any_of,
+    negate,
 )
 
 __all__ = [
@@ -75,7 +73,8 @@ __all__ = [
     'latest_message',
     'track_max',
     'track_timestamps',
-    # Property-based testing
-    'sim_property',
-    'PropertyFailure',
+    # Predicate combinators
+    'all_of',
+    'any_of',
+    'negate',
 ]

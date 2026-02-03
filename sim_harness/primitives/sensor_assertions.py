@@ -22,8 +22,8 @@ from sim_harness.core.topic_observer import (
     count_messages,
     SENSOR_QOS,
 )
-from sim_harness.core.stream_properties import all_of
 from sim_harness.core.predicates import (
+    all_of,
     scan_has_min_points,
     scan_ranges_within,
     scan_nan_ratio_below,

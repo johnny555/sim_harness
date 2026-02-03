@@ -25,7 +25,7 @@ Example (ROS-only, no sim management)::
 
     class TestMyNode(SimTestFixture):
         def test_service_available(self):
-            from sim_harness.checks.readiness import assert_node_running
+            from sim_harness import assert_node_running
             assert assert_node_running(self.node, 'my_node')
 """
 

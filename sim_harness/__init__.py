@@ -6,10 +6,7 @@ sim_harness — Python test utilities for ROS 2 simulation testing.
 
 Quick start::
 
-    from sim_harness import SimTestFixture
-    from sim_harness.checks.sensors import assert_lidar_valid
-    from sim_harness.checks.readiness import assert_nav2_active
-    from sim_harness.checks.motion import assert_vehicle_moved
+    from sim_harness import SimTestFixture, assert_lidar_valid, assert_nav2_active
 
     class TestMyRobot(SimTestFixture):
         LAUNCH_PACKAGE = 'my_robot_sim'
@@ -19,27 +16,17 @@ Quick start::
             result = assert_lidar_valid(self.node, '/scan')
             assert result.valid, result.details
 
-Check modules (organized by purpose):
-
-- ``sim_harness.checks.readiness``  — Is the system up?
-- ``sim_harness.checks.sensors``    — Are sensors working?
-- ``sim_harness.checks.motion``     — Does the robot move?
-- ``sim_harness.checks.navigation`` — Can it navigate?
-- ``sim_harness.checks.perception`` — Does it see the world?
-
-Advanced / internal:
-
-- ``sim_harness.core.topic_observer`` — TopicObserver fold combinator
-- ``sim_harness.core.hypothesis``     — Property-based testing (optional)
+Assertions are grouped by purpose below. For composable predicates
+see ``sim_harness.core.predicates``. For building custom checks
+see ``sim_harness.core.topic_observer``.
 """
 
-# === Core: the one fixture you need ===
+# ── Core fixture ──────────────────────────────────────────────────────────
 from sim_harness.core.test_fixture import SimTestFixture  # noqa: F401
 
-# Backwards compat alias (SimulationTestFixture is now SimTestFixture)
-SimulationTestFixture = SimTestFixture
+SimulationTestFixture = SimTestFixture  # backwards compat alias
 
-# === Core utilities ===
+# ── Core utilities ────────────────────────────────────────────────────────
 from sim_harness.core.message_collector import MessageCollector  # noqa: F401
 from sim_harness.core.spin_helpers import (  # noqa: F401
     spin_for_duration,
@@ -47,7 +34,7 @@ from sim_harness.core.spin_helpers import (  # noqa: F401
     spin_until_messages_received,
 )
 
-# === Simulator (lazy if Gazebo not installed) ===
+# ── Simulator ─────────────────────────────────────────────────────────────
 from sim_harness.simulator.simulation_manager import (  # noqa: F401
     SimulationManager,
     SimulationRequest,
@@ -68,7 +55,7 @@ from sim_harness.simulator.simulation_launcher import (  # noqa: F401
     kill_all_gazebo,
 )
 
-# === Validation / requirements ===
+# ── Validation / requirements ─────────────────────────────────────────────
 from sim_harness.validation.validation_result import (  # noqa: F401
     ValidationResult,
     ValidationResultCollector,
@@ -78,15 +65,16 @@ from sim_harness.validation.requirement_validator import (  # noqa: F401
     RequirementValidator,
 )
 
-# === Readiness checks ===
-from sim_harness.checks.readiness import (  # noqa: F401
+# ── Readiness checks — "Is the system up?" ────────────────────────────────
+from sim_harness.primitives.service_assertions import (  # noqa: F401
     ServiceResult,
     assert_service_available,
     assert_action_server_available,
-    assert_action_server_responsive,
     assert_node_running,
     assert_nodes_running,
     assert_parameter_exists,
+)
+from sim_harness.primitives.lifecycle_assertions import (  # noqa: F401
     LifecycleState,
     LifecycleResult,
     ControllerResult,
@@ -101,24 +89,29 @@ from sim_harness.checks.readiness import (  # noqa: F401
     assert_slam_toolbox_active,
     assert_localization_active,
 )
+from sim_harness.primitives.timing_assertions import (  # noqa: F401
+    assert_action_server_responsive,
+)
 
-# === Sensor checks ===
-from sim_harness.checks.sensors import (  # noqa: F401
+# ── Sensor checks — "Are sensors working?" ────────────────────────────────
+from sim_harness.primitives.sensor_assertions import (  # noqa: F401
     SensorDataResult,
-    TimingResult,
     assert_sensor_publishing,
     assert_lidar_valid,
     assert_gps_valid,
     assert_imu_valid,
     assert_camera_valid,
     assert_joint_states_valid,
+)
+from sim_harness.primitives.timing_assertions import (  # noqa: F401, E811
+    TimingResult,
     assert_publish_rate,
     assert_latency,
     assert_transform_available,
 )
 
-# === Motion checks ===
-from sim_harness.checks.motion import (  # noqa: F401
+# ── Motion checks — "Does the robot move?" ────────────────────────────────
+from sim_harness.primitives.vehicle_assertions import (  # noqa: F401
     MovementResult,
     VelocityResult,
     assert_vehicle_moved,
@@ -129,8 +122,8 @@ from sim_harness.checks.motion import (  # noqa: F401
     assert_vehicle_orientation,
 )
 
-# === Navigation checks ===
-from sim_harness.checks.navigation import (  # noqa: F401
+# ── Navigation checks — "Can it navigate?" ────────────────────────────────
+from sim_harness.primitives.navigation_assertions import (  # noqa: F401
     NavigationResult,
     assert_reaches_goal,
     assert_follows_path,
@@ -138,8 +131,8 @@ from sim_harness.checks.navigation import (  # noqa: F401
     assert_costmap_contains_obstacle,
 )
 
-# === Perception checks ===
-from sim_harness.checks.perception import (  # noqa: F401
+# ── Perception checks — "Does it see the world?" ──────────────────────────
+from sim_harness.primitives.perception_assertions import (  # noqa: F401
     DetectionResult,
     assert_object_detected,
     assert_object_detected_by_class,
@@ -147,10 +140,10 @@ from sim_harness.checks.perception import (  # noqa: F401
     assert_region_clear,
 )
 
-# === Predicate combinators ===
-from sim_harness.checks import all_of, any_of, negate  # noqa: F401
+# ── Predicate combinators ─────────────────────────────────────────────────
+from sim_harness.core.predicates import all_of, any_of, negate  # noqa: F401
 
-# === Readiness check framework ===
+# ── Readiness check framework ─────────────────────────────────────────────
 from sim_harness.core.readiness_check import (  # noqa: F401
     ReadinessCheck,
     CheckResult,
@@ -160,7 +153,7 @@ from sim_harness.core.readiness_check import (  # noqa: F401
     create_standard_check,
 )
 
-# === TopicObserver (for building custom checks) ===
+# ── TopicObserver (for building custom checks) ─────────────────────────────
 from sim_harness.core.topic_observer import (  # noqa: F401
     TopicObserver,
     ObservationResult,
@@ -171,12 +164,6 @@ from sim_harness.core.topic_observer import (  # noqa: F401
     latest_message,
     track_max,
     track_timestamps,
-)
-
-# === Property-based testing (optional) ===
-from sim_harness.core.sim_property import (  # noqa: F401
-    sim_property,
-    PropertyFailure,
 )
 
 
@@ -282,7 +269,7 @@ __all__ = [
     'CheckStatus',
     'CheckCategory',
     'create_standard_check',
-    # TopicObserver (custom checks)
+    # TopicObserver
     'TopicObserver',
     'ObservationResult',
     'ParallelObserver',
@@ -292,9 +279,6 @@ __all__ = [
     'latest_message',
     'track_max',
     'track_timestamps',
-    # Property-based testing
-    'sim_property',
-    'PropertyFailure',
     # Test runner
     'get_test_runner',
     'get_test_registry',
