@@ -119,30 +119,30 @@ Assertions
 
 Use standard pytest assertions. The message after the comma is shown on failure.
 
-Adding Requirement Tracing
---------------------------
+Adding Requirements Tracking
+-----------------------------
 
-Map your tests to requirements:
+To track test results against requirement IDs, mix in ``RequirementValidator``:
 
 .. code-block:: python
 
-   def test_lidar_publishes(self):
-       collector = self.create_message_collector("/scan", LaserScan)
-       self.spin_for_duration(5.0)
-       messages = collector.get_messages()
+   from sim_harness import SimTestFixture, RequirementValidator
 
-       passed = len(messages) > 0
+   class TestMyRobot(SimTestFixture, RequirementValidator):
+       def test_lidar_publishes(self):
+           collector = self.create_message_collector("/scan", LaserScan)
+           self.spin_for_duration(5.0)
+           messages = collector.get_messages()
 
-       # Record requirement validation
-       self.assert_requirement(
-           req_id="REQ-SEN-001",
-           description="LIDAR sensor publishes scan data",
-           passed=passed,
-           details=f"Received {len(messages)} messages",
-           category="Sensors"
-       )
+           passed = len(messages) > 0
 
-       assert passed, "LIDAR test failed"
+           self.assert_requirement(
+               req_id="REQ-SEN-001",
+               description="LIDAR sensor publishes scan data",
+               passed=passed,
+               details=f"Received {len(messages)} messages",
+               category="Sensors"
+           )
 
 Next Steps
 ----------

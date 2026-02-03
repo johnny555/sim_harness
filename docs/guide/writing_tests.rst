@@ -47,11 +47,13 @@ Test Categories
 
 .. code-block:: python
 
+   from sim_harness.nav2 import assert_lifecycle_node_active
+
    @pytest.mark.integration
    def test_navigation_stack(self):
        nodes = ["controller_server", "planner_server"]
-       for node in nodes:
-           result = assert_lifecycle_node_active(self.node, node)
+       for node_name in nodes:
+           result = assert_lifecycle_node_active(self.node, node_name)
            assert result.success
 
 **Motion Tests** - Involve robot movement:
@@ -88,128 +90,6 @@ Best Practices
 .. warning::
 
    Avoid test interdependence - tests should not depend on other tests running first.
-
-Property-Based Testing
-----------------------
-
-sim_harness integrates with `Hypothesis <https://hypothesis.readthedocs.io/>`_
-for property-based testing of robotic systems.  Instead of writing individual
-test cases with specific values, you describe *properties* that must hold and
-let Hypothesis generate test inputs automatically.
-
-**Why property-based testing for robotics?**
-
-- Finds edge cases you wouldn't think to test manually
-- When a test fails, Hypothesis *shrinks* to the simplest failing input
-- Persistent database remembers failures across runs
-
-**Three tiers** based on cost:
-
-**Tier 1 — Properties over Recorded Data (cheap)**
-
-Collect data once from the sim, then check many properties against the
-recorded messages.  No sim re-run.  Full Hypothesis power.
-
-.. code-block:: python
-
-   from sim_harness.core.sim_property import (
-       check_recorded_property,
-       check_recorded_monotonic,
-   )
-
-   class TestSensorQuality(SimTestFixture):
-       def test_lidar_quality(self):
-           collector = self.create_message_collector("/scan", LaserScan)
-           self.spin_for_duration(10.0)
-           messages = collector.get_messages()
-
-           # Every scan must have >= 100 valid points
-           check_recorded_property(
-               messages,
-               lambda scan: sum(1 for r in scan.ranges if math.isfinite(r)) >= 100,
-               description="All scans have >= 100 valid points",
-           )
-
-           # Timestamps must be non-decreasing
-           check_recorded_monotonic(
-               messages,
-               extract=lambda s: s.header.stamp.sec + s.header.stamp.nanosec * 1e-9,
-               description="Timestamps are non-decreasing",
-           )
-
-**Tier 2 — Scenario-Level (expensive, use sparingly)**
-
-Hypothesis generates entire test scenarios.  Use ``sim_property`` with
-``max_examples=3-5``.
-
-.. code-block:: python
-
-   from hypothesis import given
-   from sim_harness.core.sim_property import sim_property
-   from sim_harness.core.strategies import navigation_goal_2d
-
-   class TestNavigation(SimTestFixture):
-       @sim_property(max_examples=3)
-       @given(goal=navigation_goal_2d(x_bounds=(-2, 2), y_bounds=(-2, 2)))
-       def test_reaches_random_goals(self, goal):
-           """Robot can navigate to any reachable goal."""
-           # ... send goal, wait, check arrival
-
-**Tier 3 — Same-Sim Variation (medium cost)**
-
-The sim stays running.  Hypothesis varies commands between examples.
-
-.. code-block:: python
-
-   from sim_harness.core.strategies import twist_strategy
-
-   class TestStability(SimTestFixture):
-       @sim_property(max_examples=10)
-       @given(cmd=twist_strategy(max_linear=0.3, max_angular=0.5))
-       def test_any_twist_is_stable(self, cmd):
-           """No velocity command should cause NaN in odometry."""
-           # ... send cmd, observe, check no NaN
-
-**Nightly mode**: Set ``SIM_HARNESS_NIGHTLY=1`` to run 10x more examples
-for thorough overnight testing.
-
-**Install**: ``pip install sim-harness[hypothesis]`` or add
-``python3-hypothesis`` to your ``package.xml``.
-
-See ``examples/test_property_based.py`` for complete examples and
-:doc:`../api/core` for the full API reference.
-
-FP-Inspired Stream Properties
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-For checking properties over live message streams (as opposed to recorded data),
-sim_harness provides Hedgehog-inspired combinators:
-
-.. code-block:: python
-
-   from sim_harness.core.stream_properties import for_all_messages, all_of
-   from sim_harness.core.predicates import (
-       scan_has_min_points, scan_ranges_within, scan_nan_ratio_below,
-   )
-
-   # Compose a predicate from small pieces
-   valid_lidar = all_of(
-       scan_has_min_points(100),
-       scan_ranges_within(0.1, 30.0),
-       scan_nan_ratio_below(0.05),
-   )
-
-   # Check it against every message on the topic
-   result = for_all_messages(
-       self.node, self.executor, "/scan", LaserScan,
-       predicate=valid_lidar,
-       timeout_sec=5.0,
-       description="LIDAR data quality",
-   )
-   assert result.passed, result.counterexample_details
-
-Available stream properties: ``for_all_messages``, ``eventually``, ``monotonic``.
-Available combinators: ``all_of``, ``any_of``, ``negate``.
 
 C++ Unit Tests (GTest/rtest)
 ----------------------------
@@ -277,29 +157,6 @@ For automatic discovery, name your test executables with one of these patterns:
 
    # Run with verbose output to see individual test cases
    ros2 test run test_kinematics -v
-
-**rtest for ROS 2 Integration:**
-
-rtest provides additional utilities for ROS 2 testing:
-
-.. code-block:: cpp
-
-   #include <rtest/rtest.hpp>
-   #include <rclcpp/rclcpp.hpp>
-
-   class NodeTest : public rtest::RTestFixture {
-   protected:
-       void SetUp() override {
-           node_ = std::make_shared<rclcpp::Node>("test_node");
-       }
-
-       rclcpp::Node::SharedPtr node_;
-   };
-
-   TEST_F(NodeTest, PublisherCreation) {
-       auto pub = node_->create_publisher<std_msgs::msg::String>("topic", 10);
-       EXPECT_NE(pub, nullptr);
-   }
 
 **When to Use Which Test Type:**
 
