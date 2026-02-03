@@ -16,6 +16,8 @@ that run in simulation. It provides:
 - **Message Collectors** - Easy subscription and message buffering
 - **Simulation Control** - Automatic Gazebo lifecycle management
 - **Assertion Primitives** - Pre-built checks for sensors, navigation, and more
+- **FP Stream Properties** - Composable predicates, ``for_all_messages``, ``eventually``, ``monotonic``
+- **Property-Based Testing** - Hypothesis integration with ROS message strategies and three-tier approach
 - **Readiness Checks** - Configurable startup validation for real or simulated robots
 - **Requirement Validation** - Map tests to requirements for traceability
 
@@ -81,6 +83,30 @@ Built-in Assertions
    # Check robot moved
    result = assert_vehicle_moved(node, "robot_01", min_distance=1.0)
    assert result.success
+
+Property-Based Testing
+~~~~~~~~~~~~~~~~~~~~~~
+
+Use Hypothesis to generate test inputs and check invariants automatically:
+
+.. code-block:: python
+
+   from sim_harness.core.sim_property import check_recorded_property
+   from sim_harness.core.stream_properties import for_all_messages, all_of
+   from sim_harness.core.predicates import scan_has_min_points, scan_ranges_within
+
+   class TestSensorQuality(SimTestFixture):
+       def test_lidar_quality(self):
+           collector = self.create_message_collector("/scan", LaserScan)
+           self.spin_for_duration(5.0)
+           messages = collector.get_messages()
+
+           # Check property over recorded data
+           check_recorded_property(
+               messages,
+               all_of(scan_has_min_points(100), scan_ranges_within(0.1, 30.0)),
+               description="LIDAR data quality",
+           )
 
 Requirement Tracing
 ~~~~~~~~~~~~~~~~~~~

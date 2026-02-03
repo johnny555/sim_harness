@@ -33,6 +33,28 @@ Validation Summary
    collector.print_summary()
    collector.export_to_json("/tmp/results.json")
 
+ValidationScope
+---------------
+
+For parallel-safe result collection, use ``ValidationScope`` instead of the
+global singleton:
+
+.. code-block:: python
+
+   from sim_harness import ValidationScope, ValidationResult
+
+   scope = ValidationScope("navigation_tests")
+   scope.add_result(ValidationResult.create("REQ-001", "Nav works", True))
+   scope.export_to_json("/tmp/nav_results.json")
+
+Scopes can be nested -- results propagate to the parent:
+
+.. code-block:: python
+
+   parent = ValidationScope("all_tests")
+   child = ValidationScope("sensor_tests", parent=parent)
+   child.add_result(...)  # Also appears in parent
+
 Best Practices
 --------------
 
@@ -43,3 +65,8 @@ Best Practices
 .. tip::
 
    Include measurements in details for debugging.
+
+.. tip::
+
+   Use ``ValidationScope`` instead of ``ValidationResultCollector.instance()``
+   for parallel test safety.

@@ -951,6 +951,151 @@ class ValidationResultCollector:
 
 ---
 
+## Layer 5: Hypothesis Integration — Three-Tier Property Testing (IMPLEMENTED)
+
+Layer 3 above described Hypothesis integration at a conceptual level.  This section
+describes the **actual implementation**, which refines the approach into three distinct
+tiers based on cost-per-example.
+
+### The Problem with Naive Hypothesis + Sims
+
+Hypothesis is designed for functions that run in microseconds.  Robotics sims take
+seconds to minutes per scenario.  Naive `@given` with `max_examples=100` would take
+hours.
+
+### Three-Tier Solution
+
+**Tier 1: Properties over Recorded Data (CHEAP — full Hypothesis power)**
+
+Collect data once from the sim, then check many properties over the recorded
+messages.  The sim is never re-run.  Each Hypothesis example costs microseconds.
+
+```python
+from sim_harness.core.sim_property import (
+    check_recorded_property,
+    check_recorded_eventually,
+    check_recorded_monotonic,
+    hypothesis_check_recorded,
+)
+
+# Collect once (expensive)
+collector = self.create_message_collector('/scan', LaserScan)
+self.spin_for_duration(10.0)
+messages = collector.get_messages()
+
+# Check many properties (cheap)
+check_recorded_property(
+    messages,
+    lambda scan: len([r for r in scan.ranges if math.isfinite(r)]) >= 100,
+    description="All scans have >= 100 valid points",
+)
+
+check_recorded_monotonic(
+    messages,
+    extract=lambda scan: scan.header.stamp.sec + scan.header.stamp.nanosec * 1e-9,
+    description="Timestamps are non-decreasing",
+)
+```
+
+With Hypothesis, you can generate random *parameters* and check them against the
+recorded data — Hypothesis shrinks the parameter, not the sim:
+
+```python
+hypothesis_check_recorded(
+    data=messages,
+    strategy=st.floats(0.05, 0.5),  # NaN ratio thresholds
+    property_fn=lambda scan, threshold: (
+        sum(1 for r in scan.ranges if math.isnan(r))
+        / max(len(scan.ranges), 1)
+        < threshold
+    ),
+    description="NaN ratio below threshold",
+    max_examples=50,
+)
+```
+
+**Tier 2: Scenario-Level Properties (EXPENSIVE — use sparingly)**
+
+Hypothesis generates entire test scenarios (goals, initial poses).  Each example
+re-runs part of the sim.  Use `max_examples=3-5`.
+
+```python
+from sim_harness.core.sim_property import sim_property
+from sim_harness.core.strategies import navigation_goal_2d
+
+@sim_property(max_examples=3)
+@given(goal=navigation_goal_2d(x_bounds=(-2, 2), y_bounds=(-2, 2)))
+def test_reaches_random_goals(self, goal):
+    # Each example sends a different goal and waits for navigation
+    result = assert_reaches_goal(self.node, self.executor, goal, 30.0)
+    assert result.reached
+```
+
+**Tier 3: Same-Sim Parameter Variation (MEDIUM cost)**
+
+The sim stays running; Hypothesis varies commands or parameters within a single
+session.  Each example costs seconds (a velocity command + observe), not minutes
+(a full sim restart).
+
+```python
+from sim_harness.core.strategies import twist_strategy
+
+@sim_property(max_examples=10)
+@given(cmd=twist_strategy(max_linear=0.3, max_angular=0.5))
+def test_any_twist_keeps_robot_stable(self, cmd):
+    # Send cmd, observe odometry, check no NaN
+    ...
+```
+
+### `sim_property` Decorator
+
+Pre-configured `@settings` for sim testing:
+
+- No deadline (sim tests can't have deterministic timing)
+- Persistent example database at `~/.hypothesis/sim_harness/`
+- `too_slow` health check suppressed
+- Nightly mode via `SIM_HARNESS_NIGHTLY=1` (10x more examples)
+
+### ROS Message Strategies
+
+`sim_harness.core.strategies` provides Hypothesis strategies for common ROS types:
+
+| Strategy | Generates | Tier |
+|----------|-----------|------|
+| `point_strategy` | `geometry_msgs/Point` | 2, 3 |
+| `pose_strategy` | `geometry_msgs/Pose` | 2 |
+| `twist_strategy` | `geometry_msgs/Twist` (ground robot) | 3 |
+| `twist_strategy_3d` | `geometry_msgs/Twist` (6-DOF) | 3 |
+| `quaternion_strategy` | Valid unit quaternion | 2 |
+| `yaw_quaternion_strategy` | Yaw-only quaternion | 2 |
+| `navigation_goal_2d` | `PoseStamped` goal | 2 |
+| `waypoints_strategy` | List of `PoseStamped` | 2 |
+| `threshold_strategy` | Float thresholds | 1 |
+| `speed_strategy` | Speed values (m/s) | 1, 3 |
+| `duration_strategy` | Duration values (s) | 1, 3 |
+| `angle_strategy` | Angles (radians) | 1, 3 |
+
+See `examples/test_property_based.py` for complete working examples of all three tiers.
+
+---
+
+## Implementation Status
+
+| Component | Status | File(s) |
+|-----------|--------|---------|
+| `TopicObserver` | **Implemented** | `sim_harness/core/topic_observer.py` |
+| Composable predicates | **Implemented** | `sim_harness/core/predicates.py` |
+| Stream properties | **Implemented** | `sim_harness/core/stream_properties.py` |
+| `ValidationScope` | **Implemented** | C++: `validation_result.hpp/cpp`, Py: `validation_result.py` |
+| `RequirementValidator` (CRTP removed) | **Implemented** | `requirement_validator.hpp` |
+| `sim_property` decorator | **Implemented** | `sim_harness/core/sim_property.py` |
+| Hypothesis strategies | **Implemented** | `sim_harness/core/strategies.py` |
+| Recorded-data property helpers | **Implemented** | `sim_harness/core/sim_property.py` |
+| Example tests (3 tiers) | **Implemented** | `examples/test_property_based.py` |
+| Rebuild assertions on TopicObserver | Proposed | Existing functions still work as-is |
+
+---
+
 ## Summary: What Changes, What Stays
 
 | Component | Status | Change |
@@ -967,6 +1112,8 @@ class ValidationResultCollector:
 | **New: `for_all_messages`** | Add | Hedgehog's `forAll` over topics |
 | **New: `eventually`/`monotonic`** | Add | Temporal stream properties |
 | **New: Hypothesis strategies** | Add | Property-based scenario generation |
+| **New: `sim_property`** | Add | Pre-configured settings for sim tests |
+| **New: Recorded-data helpers** | Add | Tier 1 property checking without sim re-run |
 
 ### Dependency Additions
 
@@ -978,14 +1125,13 @@ class ValidationResultCollector:
 ```python
 # setup.py extras_require
 extras_require={
-    'test': ['hypothesis>=6.0'],
+    'hypothesis': ['hypothesis>=6.0'],
 }
 ```
 
 ### Estimated Impact
 
 - **Lines removed**: ~500 (boilerplate in primitives)
-- **Lines added**: ~300 (TopicObserver, predicates, stream properties)
-- **Net**: ~200 lines smaller, significantly more composable
-- **New capability**: Property-based testing with shrinking
+- **Lines added**: ~300 (TopicObserver, predicates, stream properties) + ~700 (Hypothesis infra)
+- **New capability**: Property-based testing with shrinking, three-tier Hypothesis integration
 - **Backward compatibility**: Old assertion functions remain as thin wrappers

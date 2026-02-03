@@ -164,6 +164,41 @@ Validate timing and latency requirements:
    )
    assert result.success
 
+FP-Inspired Alternative: Composable Predicates
+-----------------------------------------------
+
+For more flexible validation, you can compose small predicates instead of
+using monolithic assertion functions:
+
+.. code-block:: python
+
+   from sim_harness.core.stream_properties import for_all_messages, all_of
+   from sim_harness.core.predicates import (
+       scan_has_min_points, scan_ranges_within, scan_nan_ratio_below,
+       imu_no_nan, imu_accel_within,
+       odom_position_finite, odom_velocity_below,
+   )
+
+   # Compose a LIDAR quality check from small pieces
+   valid_lidar = all_of(
+       scan_has_min_points(100),
+       scan_ranges_within(0.1, 30.0),
+       scan_nan_ratio_below(0.05),
+   )
+
+   result = for_all_messages(
+       self.node, self.executor, "/scan", LaserScan,
+       predicate=valid_lidar,
+       timeout_sec=5.0,
+   )
+   assert result.passed, result.counterexample_details
+
+When a property fails, ``result.counterexample`` contains the exact message
+that violated it, and ``result.first_failure_index`` tells you where in the
+stream it occurred.
+
+See :doc:`writing_tests` for the full property-based testing guide.
+
 Assertion Results
 -----------------
 
