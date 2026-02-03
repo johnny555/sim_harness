@@ -5,10 +5,8 @@
 """Unit tests for message collector module."""
 
 import pytest
-import threading
-import time
 
-from sim_harness.core.message_collector import MessageCollector
+from sim_harness.collector import MessageCollector
 
 
 # Mock classes for testing without ROS 2
@@ -57,9 +55,6 @@ class TestMessageCollector:
         """Test collector initialization."""
         node = MockNode()
         collector = MessageCollector(node, "/test_topic", MockMessage)
-
-        assert collector.topic == "/test_topic"
-        assert collector.msg_type == MockMessage
         assert collector.count() == 0
 
     def test_collect_messages(self):
@@ -67,7 +62,6 @@ class TestMessageCollector:
         node = MockNode()
         collector = MessageCollector(node, "/test_topic", MockMessage)
 
-        # Simulate receiving messages
         sub = node._subscriptions[0]
         sub.simulate_message(MockMessage("data1"))
         sub.simulate_message(MockMessage("data2"))
@@ -79,19 +73,19 @@ class TestMessageCollector:
         assert messages[0].data == "data1"
         assert messages[1].data == "data2"
 
-    def test_get_latest(self):
+    def test_latest(self):
         """Test getting latest message."""
         node = MockNode()
         collector = MessageCollector(node, "/test_topic", MockMessage)
 
-        assert collector.get_latest() is None
+        assert collector.latest() is None
 
         sub = node._subscriptions[0]
         sub.simulate_message(MockMessage("first"))
         sub.simulate_message(MockMessage("second"))
         sub.simulate_message(MockMessage("third"))
 
-        latest = collector.get_latest()
+        latest = collector.latest()
         assert latest is not None
         assert latest.data == "third"
 
@@ -107,45 +101,16 @@ class TestMessageCollector:
         collector.clear()
         assert collector.count() == 0
 
-    def test_callback_invoked(self):
-        """Test that custom callback is invoked."""
+    def test_max_messages(self):
+        """Test max_messages limit."""
         node = MockNode()
-        callback_data = []
-
-        def custom_callback(msg):
-            callback_data.append(msg.data)
-
-        collector = MessageCollector(
-            node, "/test_topic", MockMessage,
-            callback=custom_callback
-        )
+        collector = MessageCollector(node, "/test_topic", MockMessage, max_messages=3)
 
         sub = node._subscriptions[0]
-        sub.simulate_message(MockMessage("test"))
+        for i in range(10):
+            sub.simulate_message(MockMessage(f"msg_{i}"))
 
-        assert len(callback_data) == 1
-        assert callback_data[0] == "test"
-
-    def test_thread_safety(self):
-        """Test thread-safe message collection."""
-        node = MockNode()
-        collector = MessageCollector(node, "/test_topic", MockMessage)
-        sub = node._subscriptions[0]
-
-        # Simulate concurrent message production
-        def producer():
-            for i in range(100):
-                sub.simulate_message(MockMessage(f"msg_{i}"))
-                time.sleep(0.001)
-
-        threads = [threading.Thread(target=producer) for _ in range(5)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        # Should have 500 messages (5 threads * 100 messages each)
-        assert collector.count() == 500
+        assert collector.count() == 3
 
     def test_destroy(self):
         """Test destroying collector subscription."""

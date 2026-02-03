@@ -6,11 +6,13 @@
 from sim_harness.validation.validation_result import (
     ValidationResult,
     ValidationResultCollector,
+    ValidationScope,
 )
 from sim_harness.validation.requirement_validator import RequirementValidator
 
 __all__ = [
     'ValidationResult',
     'ValidationResultCollector',
+    'ValidationScope',
     'RequirementValidator',
 ]

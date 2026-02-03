@@ -61,13 +61,13 @@ bool TestFixtureBase::spinUntilCondition(
 
 void TestFixtureBase::clearMessages(const std::string & key)
 {
-  // Note: This is a simplified implementation.
-  // In a full implementation, we'd need to handle type erasure properly.
-  // For now, collectors should be cleared via their direct references.
-  (void)key;
-  RCLCPP_WARN(
-    node_->get_logger(),
-    "clearMessages by key is not fully implemented. Use collector->clear() instead.");
+  auto it = collectors_.find(key);
+  if (it != collectors_.end()) {
+    // Remove the collector entry entirely — the typed shared_ptr held by
+    // the caller is unaffected, but a subsequent createMessageCollector()
+    // call with the same key will start fresh.
+    collectors_.erase(it);
+  }
 }
 
 }  // namespace sim_harness

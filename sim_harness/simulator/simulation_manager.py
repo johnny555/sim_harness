@@ -21,11 +21,7 @@ from sim_harness.simulator.simulation_launcher import (
     SimulationLauncher,
     LaunchConfig,
 )
-from sim_harness.core.test_isolation import (
-    TestIsolationConfig,
-    apply_test_isolation,
-    get_test_isolation_config,
-)
+import random
 
 
 @dataclass
@@ -134,7 +130,7 @@ class SimulationManager:
         self._current_request: Optional[SimulationRequest] = None
         self._current_hash: str = ""
         self._gazebo = GazeboBackend()
-        self._isolation_config: Optional[TestIsolationConfig] = None
+        self._isolation_domain_id: Optional[int] = None
         self._started_by_us: bool = False
         self._active_users: int = 0  # Track how many tests are using the sim
 
@@ -198,9 +194,9 @@ class SimulationManager:
             if self._launcher is not None and self._started_by_us:
                 self._stop_internal()
 
-            # Apply test isolation
-            self._isolation_config = get_test_isolation_config()
-            apply_test_isolation(self._isolation_config)
+            # Apply test isolation (unique ROS_DOMAIN_ID)
+            self._isolation_domain_id = random.randint(1, 230)
+            os.environ['ROS_DOMAIN_ID'] = str(self._isolation_domain_id)
 
             # Check if a functional simulation is already running externally
             # Use is_responsive() not is_running() to detect zombie processes

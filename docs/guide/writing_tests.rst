@@ -47,11 +47,13 @@ Test Categories
 
 .. code-block:: python
 
+   from sim_harness.nav2 import assert_lifecycle_node_active
+
    @pytest.mark.integration
    def test_navigation_stack(self):
        nodes = ["controller_server", "planner_server"]
-       for node in nodes:
-           result = assert_lifecycle_node_active(self.node, node)
+       for node_name in nodes:
+           result = assert_lifecycle_node_active(self.node, node_name)
            assert result.success
 
 **Motion Tests** - Involve robot movement:
@@ -155,29 +157,6 @@ For automatic discovery, name your test executables with one of these patterns:
 
    # Run with verbose output to see individual test cases
    ros2 test run test_kinematics -v
-
-**rtest for ROS 2 Integration:**
-
-rtest provides additional utilities for ROS 2 testing:
-
-.. code-block:: cpp
-
-   #include <rtest/rtest.hpp>
-   #include <rclcpp/rclcpp.hpp>
-
-   class NodeTest : public rtest::RTestFixture {
-   protected:
-       void SetUp() override {
-           node_ = std::make_shared<rclcpp::Node>("test_node");
-       }
-
-       rclcpp::Node::SharedPtr node_;
-   };
-
-   TEST_F(NodeTest, PublisherCreation) {
-       auto pub = node_->create_publisher<std_msgs::msg::String>("topic", 10);
-       EXPECT_NE(pub, nullptr);
-   }
 
 **When to Use Which Test Type:**
 

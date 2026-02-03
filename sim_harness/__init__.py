@@ -2,70 +2,51 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-sim_harness - Python Test Utilities for ROS 2 Simulation Testing.
+sim_harness — Python test utilities for ROS 2 simulation testing.
 
-A pytest-based test framework for ROS 2 robotic simulations, providing:
-- Test fixtures with automatic ROS 2 node management
-- Message collectors for topic subscription
-- Sensor, vehicle, and navigation assertion helpers
-- Requirements traceability and validation
+Quick start::
 
-Example usage:
-    import pytest
-    from sim_harness import SimTestFixture, assert_sensor_publishing
+    from sim_harness import SimTestFixture, assert_lidar_valid
 
     class TestMyRobot(SimTestFixture):
-        def test_lidar_publishes(self):
-            collector = self.create_message_collector('/scan', LaserScan)
-            self.spin_for_duration(5.0)
-            assert collector.count() > 0
+        LAUNCH_PACKAGE = 'my_robot_sim'
+        LAUNCH_FILE = 'sim.launch.py'
+
+        def test_lidar(self):
+            result = assert_lidar_valid(self.node, '/scan')
+            assert result.valid, result.details
+
+Extensions for specialized stacks::
+
+    from sim_harness.nav2 import assert_nav2_active, assert_reaches_goal
+    from sim_harness.perception import assert_object_detected
 """
 
-from sim_harness.core.test_fixture import SimTestFixture
-from sim_harness.core.simulation_fixture import (
+# ── Core fixture ──────────────────────────────────────────────────────────
+from sim_harness.fixture import (  # noqa: F401
+    SimTestFixture,
     SimulationTestFixture,
-    simulation_manager,
-    session_simulation,
+    ros_node,
+    ros_executor,
 )
-from sim_harness.simulator.simulation_manager import (
-    SimulationManager,
-    SimulationRequest,
-    get_simulation_manager,
-)
-from sim_harness.core.message_collector import MessageCollector
-from sim_harness.core.spin_helpers import (
+
+# ── Core utilities ────────────────────────────────────────────────────────
+from sim_harness.collector import MessageCollector  # noqa: F401
+from sim_harness.spin import (  # noqa: F401
     spin_for_duration,
     spin_until_condition,
     spin_until_messages_received,
 )
-from sim_harness.core.test_isolation import (
-    get_test_isolation_config,
-    apply_test_isolation,
-    generate_test_node_name,
-)
 
-from sim_harness.simulator.simulator_interface import (
-    SimulatorType,
-    SimulatorConfig,
-    SimulatorInterface,
-)
-from sim_harness.simulator.gazebo_backend import (
-    GazeboBackend,
-    NullBackend,
-)
-from sim_harness.simulator.simulation_launcher import (
-    SimulationLauncher,
-    LaunchConfig,
-    kill_all_gazebo,
-)
-
-from sim_harness.validation.validation_result import (
-    ValidationResult,
-    ValidationResultCollector,
-)
-from sim_harness.validation.requirement_validator import RequirementValidator
-
-from sim_harness.primitives.sensor_assertions import (
+# ── Service checks ────────────────────────────────────────────────────────
+from sim_harness.assertions import (  # noqa: F401
+    ServiceResult,
+    assert_service_available,
+    assert_action_server_available,
+    assert_node_running,
+    assert_nodes_running,
+    assert_parameter_exists,
+    # Sensor checks
     SensorDataResult,
     assert_sensor_publishing,
     assert_lidar_valid,
@@ -73,9 +54,13 @@ from sim_harness.primitives.sensor_assertions import (
     assert_imu_valid,
     assert_camera_valid,
     assert_joint_states_valid,
-)
-
-from sim_harness.primitives.vehicle_assertions import (
+    # Timing checks
+    TimingResult,
+    assert_publish_rate,
+    assert_latency,
+    assert_transform_available,
+    assert_action_server_responsive,
+    # Motion checks
     MovementResult,
     VelocityResult,
     assert_vehicle_moved,
@@ -86,65 +71,39 @@ from sim_harness.primitives.vehicle_assertions import (
     assert_vehicle_orientation,
 )
 
-from sim_harness.primitives.lifecycle_assertions import (
-    LifecycleState,
-    LifecycleResult,
-    ControllerResult,
-    LocalizationResult,
-    assert_lifecycle_node_active,
-    assert_lifecycle_node_state,
-    assert_lifecycle_nodes_active,
-    assert_controller_active,
-    assert_controllers_active,
-    assert_controller_manager_available,
-    assert_nav2_active,
-    assert_slam_toolbox_active,
-    assert_localization_active,
+# ── Simulator (lazy — only imported when used) ────────────────────────────
+from sim_harness.simulator.simulation_manager import (  # noqa: F401
+    SimulationManager,
+    SimulationRequest,
+    get_simulation_manager,
+)
+from sim_harness.simulator.simulator_interface import (  # noqa: F401
+    SimulatorType,
+    SimulatorConfig,
+    SimulatorInterface,
+)
+from sim_harness.simulator.gazebo_backend import (  # noqa: F401
+    GazeboBackend,
+    NullBackend,
+)
+from sim_harness.simulator.simulation_launcher import (  # noqa: F401
+    SimulationLauncher,
+    LaunchConfig,
+    kill_all_gazebo,
 )
 
-from sim_harness.primitives.navigation_assertions import (
-    NavigationResult,
-    assert_reaches_goal,
-    assert_follows_path,
-    assert_navigation_action_succeeds,
-    assert_costmap_contains_obstacle,
+# ── Validation / requirements ─────────────────────────────────────────────
+from sim_harness.validation.validation_result import (  # noqa: F401
+    ValidationResult,
+    ValidationResultCollector,
+    ValidationScope,
+)
+from sim_harness.validation.requirement_validator import (  # noqa: F401
+    RequirementValidator,
 )
 
-from sim_harness.primitives.service_assertions import (
-    ServiceResult,
-    assert_service_available,
-    assert_action_server_available,
-    assert_node_running,
-    assert_nodes_running,
-    assert_parameter_exists,
-)
+# ── Test runner (lazy) ────────────────────────────────────────────────────
 
-from sim_harness.primitives.timing_assertions import (
-    TimingResult,
-    assert_publish_rate,
-    assert_latency,
-    assert_transform_available,
-    assert_action_server_responsive,
-)
-
-from sim_harness.primitives.perception_assertions import (
-    DetectionResult,
-    assert_object_detected,
-    assert_object_detected_by_class,
-    assert_min_objects_detected,
-    assert_region_clear,
-)
-
-from sim_harness.core.readiness_check import (
-    ReadinessCheck,
-    CheckResult,
-    CheckItemResult,
-    CheckStatus,
-    CheckCategory,
-    create_standard_check,
-)
-
-# Test runner (lazy import to avoid circular imports)
 def get_test_runner():
     """Get the TestRunner class for running launch tests."""
     from sim_harness.test_runner import TestRunner
@@ -155,20 +114,21 @@ def get_test_registry():
     from sim_harness.test_runner import TestRegistry
     return TestRegistry
 
+
 __all__ = [
-    # Core
+    # Core fixture
     'SimTestFixture',
     'SimulationTestFixture',
-    'simulation_manager',
-    'session_simulation',
     'MessageCollector',
     'spin_for_duration',
     'spin_until_condition',
     'spin_until_messages_received',
-    'get_test_isolation_config',
-    'apply_test_isolation',
-    'generate_test_node_name',
+    'ros_node',
+    'ros_executor',
     # Simulator
+    'SimulationManager',
+    'SimulationRequest',
+    'get_simulation_manager',
     'SimulatorType',
     'SimulatorConfig',
     'SimulatorInterface',
@@ -177,14 +137,19 @@ __all__ = [
     'SimulationLauncher',
     'LaunchConfig',
     'kill_all_gazebo',
-    'SimulationManager',
-    'SimulationRequest',
-    'get_simulation_manager',
     # Validation
     'ValidationResult',
     'ValidationResultCollector',
+    'ValidationScope',
     'RequirementValidator',
-    # Sensor assertions
+    # Service checks
+    'ServiceResult',
+    'assert_service_available',
+    'assert_action_server_available',
+    'assert_node_running',
+    'assert_nodes_running',
+    'assert_parameter_exists',
+    # Sensor checks
     'SensorDataResult',
     'assert_sensor_publishing',
     'assert_lidar_valid',
@@ -192,7 +157,13 @@ __all__ = [
     'assert_imu_valid',
     'assert_camera_valid',
     'assert_joint_states_valid',
-    # Vehicle assertions
+    # Timing checks
+    'TimingResult',
+    'assert_publish_rate',
+    'assert_latency',
+    'assert_transform_available',
+    'assert_action_server_responsive',
+    # Motion checks
     'MovementResult',
     'VelocityResult',
     'assert_vehicle_moved',
@@ -201,52 +172,6 @@ __all__ = [
     'assert_vehicle_velocity',
     'assert_vehicle_in_region',
     'assert_vehicle_orientation',
-    # Lifecycle assertions
-    'LifecycleState',
-    'LifecycleResult',
-    'ControllerResult',
-    'LocalizationResult',
-    'assert_lifecycle_node_active',
-    'assert_lifecycle_node_state',
-    'assert_lifecycle_nodes_active',
-    'assert_controller_active',
-    'assert_controllers_active',
-    'assert_controller_manager_available',
-    'assert_nav2_active',
-    'assert_slam_toolbox_active',
-    'assert_localization_active',
-    # Navigation assertions
-    'NavigationResult',
-    'assert_reaches_goal',
-    'assert_follows_path',
-    'assert_navigation_action_succeeds',
-    'assert_costmap_contains_obstacle',
-    # Service assertions
-    'ServiceResult',
-    'assert_service_available',
-    'assert_action_server_available',
-    'assert_node_running',
-    'assert_nodes_running',
-    'assert_parameter_exists',
-    # Timing assertions
-    'TimingResult',
-    'assert_publish_rate',
-    'assert_latency',
-    'assert_transform_available',
-    'assert_action_server_responsive',
-    # Perception assertions
-    'DetectionResult',
-    'assert_object_detected',
-    'assert_object_detected_by_class',
-    'assert_min_objects_detected',
-    'assert_region_clear',
-    # Readiness checks
-    'ReadinessCheck',
-    'CheckResult',
-    'CheckItemResult',
-    'CheckStatus',
-    'CheckCategory',
-    'create_standard_check',
     # Test runner
     'get_test_runner',
     'get_test_registry',

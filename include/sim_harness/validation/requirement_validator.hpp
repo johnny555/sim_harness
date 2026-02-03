@@ -25,13 +25,13 @@ constexpr const char * RESET = "\033[0m";
 }  // namespace detail
 
 /**
- * @brief CRTP mixin providing requirement validation methods.
+ * @brief Mixin providing requirement validation methods.
  *
  * Add this to your test class to enable requirement tracking:
  *
  * @code
  * class MyTest : public TestFixtureBase,
- *                public RequirementValidator<MyTest> {
+ *                public RequirementValidator {
  *   // ...
  * };
  *
@@ -39,10 +39,7 @@ constexpr const char * RESET = "\033[0m";
  *   assertRequirement("REQ-001", "System does X", condition);
  * }
  * @endcode
- *
- * @tparam Derived The derived test class (CRTP pattern)
  */
-template<typename Derived>
 class RequirementValidator
 {
 public:

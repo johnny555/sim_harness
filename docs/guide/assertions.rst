@@ -41,17 +41,12 @@ Validate robot movement and state:
    )
 
    # Check robot moved at least 0.5 meters
-   result = assert_vehicle_moved(node, "robot_01", min_distance=0.5)
+   result = assert_vehicle_moved(node, min_distance=0.5)
    assert result.success, f"Robot didn't move: {result.details}"
-   print(f"Moved {result.distance_moved:.2f}m")
 
    # Verify robot is stationary
-   is_stopped = assert_vehicle_stationary(node, "robot_01", duration_sec=2.0)
+   is_stopped = assert_vehicle_stationary(node, duration_sec=2.0)
    assert is_stopped
-
-   # Check robot reached target velocity
-   result = assert_vehicle_velocity(node, "robot_01", target_velocity=1.0)
-   assert result.success
 
 Ground Truth Validation
 -----------------------
@@ -65,22 +60,12 @@ This helps detect odometry drift and confirms the robot actually moved in simula
 
    result = assert_vehicle_moved_with_ground_truth(
        node,
-       vehicle_id="turtlebot3",              # ROS namespace
-       gazebo_model_name="turtlebot3_waffle", # Model name in Gazebo
+       gazebo_model_name="turtlebot3_waffle",
        min_distance=1.0,
        world_name="turtlebot3_world"
    )
 
-   # Check robot actually moved (ground truth)
    assert result.success, f"Robot didn't move: {result.details}"
-
-   # Validate odometry accuracy
-   assert result.odom_error < 0.1, f"Odom drift too high: {result.odom_error}m"
-
-   # Access detailed results
-   print(f"Ground truth distance: {result.ground_truth_distance:.2f}m")
-   print(f"Odometry distance: {result.distance_moved:.2f}m")
-   print(f"Odom error: {result.odom_error:.3f}m")
 
 The ``MovementResult`` from ground truth validation includes:
 
@@ -88,18 +73,17 @@ The ``MovementResult`` from ground truth validation includes:
 - ``distance_moved`` - Distance according to odometry
 - ``ground_truth_distance`` - Distance according to Gazebo
 - ``odom_error`` - Position error between odom and ground truth
-- ``ground_truth_start`` / ``ground_truth_end`` - Exact positions from Gazebo
 
 See :doc:`simulation_control` for more on direct Gazebo ground truth access.
 
 Navigation Assertions
 ---------------------
 
-Validate navigation stack components:
+Lifecycle, controller, and navigation assertions live in ``sim_harness.nav2``:
 
 .. code-block:: python
 
-   from sim_harness import (
+   from sim_harness.nav2 import (
        assert_lifecycle_node_active,
        assert_controller_active,
        assert_nav2_active,
@@ -111,12 +95,12 @@ Validate navigation stack components:
    assert result.success
 
    # Check Nav2 stack is ready
-   result = assert_nav2_active(node, timeout_sec=30.0)
-   assert result.success
+   results = assert_nav2_active(node, timeout_sec=30.0)
+   assert all(r.success for r in results)
 
    # Verify robot reaches a goal
    result = assert_reaches_goal(
-       node, goal_x=2.0, goal_y=1.0, tolerance=0.3, timeout_sec=60.0
+       node, goal_pose=goal, tolerance=0.3, timeout_sec=60.0
    )
    assert result.success
 
@@ -164,6 +148,25 @@ Validate timing and latency requirements:
    )
    assert result.success
 
+Perception Assertions
+---------------------
+
+Object detection and safety zone checks live in ``sim_harness.perception``:
+
+.. code-block:: python
+
+   from geometry_msgs.msg import Point
+   from sim_harness.perception import assert_object_detected, assert_region_clear
+
+   # Check an object is detected near a position
+   pos = Point(x=2.0, y=1.0, z=0.0)
+   result = assert_object_detected(node, "/detections", pos, search_radius=1.0)
+   assert result.detected, result.details
+
+   # Verify a safety zone is clear
+   center = Point(x=0.0, y=0.0, z=0.0)
+   assert assert_region_clear(node, "/detections", center, radius=0.5)
+
 Assertion Results
 -----------------
 
@@ -177,12 +180,10 @@ Most assertions return result objects with:
 
 .. code-block:: python
 
-   result = assert_vehicle_moved(node, "robot", min_distance=1.0)
+   result = assert_vehicle_moved(node, min_distance=1.0)
 
    if not result.success:
        print(f"FAIL: {result.details}")
-       print(f"Start: {result.start_position}")
-       print(f"End: {result.end_position}")
        print(f"Distance: {result.distance_moved}m")
    else:
        print(f"PASS: Robot moved {result.distance_moved:.2f}m")

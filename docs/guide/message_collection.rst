@@ -32,10 +32,9 @@ Accessing Messages
 .. code-block:: python
 
    messages = collector.get_messages()    # All messages
-   latest = collector.get_latest()        # Most recent
-   count = collector.message_count()      # Count
+   latest = collector.latest()            # Most recent
+   count = collector.count()              # Count
    collector.clear()                      # Clear buffer
-   success = collector.wait_for_messages(count=5, timeout=10.0)
 
 Best Practices
 --------------

@@ -45,7 +45,7 @@ using sim_harness::ValidationResultCollector;
  */
 class TurtleBot3IntegrationTest
   : public TestFixtureBase,
-    public sim_harness::RequirementValidator<TurtleBot3IntegrationTest>
+    public sim_harness::RequirementValidator
 {
 protected:
   void SetUp() override
