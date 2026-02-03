@@ -131,3 +131,46 @@ used by any test, example, or other module. Users preferred calling individual
 assertion functions (`assert_service_available`, `assert_lifecycle_node_active`,
 etc.) directly. The builder pattern added a layer of abstraction over
 functionality already available as simple function calls.
+
+## 8. Core Module Layer (`core/` package — 1,551 lines, 8 files)
+
+Intermediate abstraction layer between user-facing API and assertion primitives:
+
+- **`TopicObserver`** — Generic subscribe/spin/check pattern with `run_standalone()`
+  and fold-based reducers (`collect_messages`, `count_messages`, `latest_message`,
+  `track_max`, `track_timestamps`). `ParallelObserver` ran multiple observers.
+- **`predicates.py`** — Composable predicate combinators (`all_of`, `any_of`,
+  `negate`) for building complex sensor checks.
+- **`test_isolation.py`** — `TestIsolationConfig` / `apply_test_isolation()` /
+  `generate_test_node_name()` for unique ROS domain IDs per test.
+- **`message_collector.py`** — Thread-safe message collector with callbacks,
+  filtering, and rate statistics.
+- **`spin_helpers.py`** — `spin_for_duration`, `spin_until_condition`,
+  `spin_until_messages_received`.
+- **`test_fixture.py`** — SimTestFixture inheriting from RequirementValidator.
+- **`simulation_fixture.py`** — SimulationTestFixture alias.
+
+**Why removed:** The 6-file flat structure (`fixture.py`, `collector.py`,
+`spin.py`, `assertions.py`, `nav2.py`, `perception.py`) inlines all needed
+functionality. TopicObserver's subscribe/spin/check pattern is just a few lines
+when inlined. Test isolation is a single `os.environ` call. Predicates were
+only used internally. The simpler MessageCollector drops thread-safety
+overhead that wasn't needed (ROS callbacks are single-threaded per executor).
+
+## 9. Primitives Module Layer (`primitives/` package — 3,047 lines, 8 files)
+
+Individual assertion modules, each with full TopicObserver integration:
+
+- **`sensor_assertions.py`** (433 lines) — LIDAR, GPS, IMU, camera, joint state
+- **`timing_assertions.py`** (308 lines) — publish rate, latency, TF availability
+- **`service_assertions.py`** (293 lines) — service/action/node/parameter checks
+- **`vehicle_assertions.py`** (631 lines) — movement, velocity, region, orientation
+- **`lifecycle_assertions.py`** (515 lines) — lifecycle state, controllers, Nav2
+- **`navigation_assertions.py`** (411 lines) — goal reaching, path following, costmaps
+- **`perception_assertions.py`** (455 lines) — object detection, region clearing
+
+**Why removed:** All assertion logic merged into `assertions.py` (service,
+sensor, timing, vehicle), `nav2.py` (lifecycle, navigation), and
+`perception.py` (detection). Verbose docstrings trimmed, TopicObserver
+dependency eliminated by inlining 3-line subscribe/spin/collect patterns.
+Total: 3,047 lines → 1,420 lines across three files.

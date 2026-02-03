@@ -34,12 +34,13 @@ from geometry_msgs.msg import TwistStamped
 from sim_harness import (
     SimTestFixture,
     SimulationTestFixture,  # backwards compat alias for SimTestFixture
+    RequirementValidator,
     ValidationResultCollector,
 )
 
 
 @pytest.mark.integration
-class TestTurtleBot3WithSimControl(SimTestFixture):
+class TestTurtleBot3WithSimControl(SimTestFixture, RequirementValidator):
     """
     Integration tests with automatic simulation control.
 
