@@ -9,8 +9,8 @@ Service checks, sensor validation, timing, and vehicle motion assertions.
 
 import math
 import time
-from dataclasses import dataclass, field
-from typing import Any, List, Optional, Tuple, Type, TypeVar
+from dataclasses import dataclass
+from typing import List, Optional, Tuple, Type, TypeVar
 
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
@@ -450,7 +450,7 @@ def assert_transform_available(
     except ImportError:
         return False
     buf = Buffer()
-    listener = TransformListener(buf, node)
+    _ = TransformListener(buf, node)  # Listener starts background thread automatically
     executor = SingleThreadedExecutor()
     executor.add_node(node)
     try:
@@ -464,6 +464,7 @@ def assert_transform_available(
                 if age_ms <= max_age_ms:
                     return True
             except Exception:
+                # Ignore transient transform lookup failures and keep trying until timeout.
                 pass
         return False
     finally:

@@ -63,9 +63,11 @@ void TestFixtureBase::clearMessages(const std::string & key)
 {
   auto it = collectors_.find(key);
   if (it != collectors_.end()) {
-    // Remove the collector entry entirely — the typed shared_ptr held by
-    // the caller is unaffected, but a subsequent createMessageCollector()
-    // call with the same key will start fresh.
+    // Note: The collector's subscription remains active until the shared_ptr
+    // held by the caller is destroyed. This is intentional - we only remove
+    // the association from TestFixtureBase, not destroy the collector itself.
+    // If you need to stop the subscription immediately, call destroy() on the
+    // typed MessageCollector pointer before calling clearMessages().
     collectors_.erase(it);
   }
 }

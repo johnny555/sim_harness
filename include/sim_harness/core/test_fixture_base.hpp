@@ -122,14 +122,10 @@ protected:
     if (it == collectors_.end()) {
       return {};
     }
-    // any_cast throws std::bad_any_cast on type mismatch — catch it
-    // instead of relying on the redundant dynamic_pointer_cast that was here before.
+    // any_cast throws std::bad_any_cast on type mismatch
     try {
       auto collector =
         std::any_cast<std::shared_ptr<MessageCollector<MsgT>>>(it->second);
-      if (!collector) {
-        return {};
-      }
       return collector->getMessages();
     } catch (const std::bad_any_cast &) {
       return {};

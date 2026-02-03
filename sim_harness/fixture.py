@@ -77,8 +77,14 @@ class SimTestFixture:
     # -- Node lifecycle -----------------------------------------------------
 
     def _setup_node(self):
-        domain = random.randint(1, 230)
-        os.environ['ROS_DOMAIN_ID'] = str(domain)
+        # Use existing domain ID if already set (e.g., by simulation_manager),
+        # otherwise generate one in the 100-199 range to avoid conflicts with
+        # production systems (0-99 and 200-230).
+        if 'ROS_DOMAIN_ID' not in os.environ:
+            domain = random.randint(100, 199)
+            os.environ['ROS_DOMAIN_ID'] = str(domain)
+        else:
+            domain = int(os.environ['ROS_DOMAIN_ID'])
 
         if not SimTestFixture._rclpy_initialized:
             rclpy.init()
@@ -114,6 +120,7 @@ class SimTestFixture:
             try:
                 rclpy.shutdown()
             except Exception:
+                # Ignore errors during shutdown - process is exiting anyway.
                 pass
             SimTestFixture._rclpy_initialized = False
 
@@ -169,6 +176,7 @@ class SimTestFixture:
             from sim_harness.simulator.simulation_manager import get_simulation_manager
             get_simulation_manager().release()
         except ImportError:
+            # Simulation manager not available - skip release.
             pass
 
     # -- Properties ---------------------------------------------------------

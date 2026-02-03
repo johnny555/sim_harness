@@ -15,9 +15,6 @@ setup(
     version='1.0.0',
     packages=find_packages(exclude=['test']),
     install_requires=['setuptools'],
-    extras_require={
-        'hypothesis': ['hypothesis>=6.0'],
-    },
     zip_safe=True,
     author='John',
     author_email='john@example.com',
