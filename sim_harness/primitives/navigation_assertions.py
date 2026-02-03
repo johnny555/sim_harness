@@ -5,6 +5,10 @@
 Navigation stack validation assertions.
 
 Provides functions to validate robot navigation behavior.
+
+``assert_costmap_contains_obstacle`` uses :class:`TopicObserver`.
+The remaining functions use manual loops because they require early exit
+with long timeouts (60s+) or use the action server API directly.
 """
 
 import math
@@ -18,11 +22,11 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.action import ActionClient
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
-from geometry_msgs.msg import PoseStamped, Point
+from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, OccupancyGrid
 from nav2_msgs.action import NavigateToPose
 
-from sim_harness.core.spin_helpers import spin_for_duration
+from sim_harness.core.topic_observer import latest_message
 
 
 @dataclass
@@ -52,16 +56,12 @@ def assert_reaches_goal(
     goal_pose: PoseStamped,
     tolerance: float = 0.5,
     timeout_sec: float = 60.0,
-    odom_topic: str = "/odom"
+    odom_topic: str = "/odom",
 ) -> NavigationResult:
     """
     Assert that the robot reaches a goal position.
 
     Monitors odometry until vehicle reaches goal within tolerance.
-
-    Note:
-        This function temporarily adds the node to an internal executor
-        and removes it when done. The node remains valid after the call.
 
     Args:
         node: ROS 2 node
@@ -85,13 +85,13 @@ def assert_reaches_goal(
         nonlocal latest_position
         latest_position = (
             msg.pose.pose.position.x,
-            msg.pose.pose.position.y
+            msg.pose.pose.position.y,
         )
 
     qos = QoSProfile(
         depth=10,
         reliability=ReliabilityPolicy.BEST_EFFORT,
-        durability=DurabilityPolicy.VOLATILE
+        durability=DurabilityPolicy.VOLATILE,
     )
 
     odom_sub = node.create_subscription(Odometry, odom_topic, odom_callback, qos)
@@ -100,7 +100,7 @@ def assert_reaches_goal(
         success=False,
         final_distance_to_goal=float('inf'),
         time_taken_sec=0.0,
-        details=""
+        details="",
     )
 
     try:
@@ -116,11 +116,17 @@ def assert_reaches_goal(
                 if distance <= tolerance:
                     result.success = True
                     result.time_taken_sec = time.monotonic() - start_time
-                    result.details = f"Reached goal in {result.time_taken_sec:.1f}s (distance: {distance:.2f}m)"
+                    result.details = (
+                        f"Reached goal in {result.time_taken_sec:.1f}s "
+                        f"(distance: {distance:.2f}m)"
+                    )
                     return result
 
         result.time_taken_sec = time.monotonic() - start_time
-        result.details = f"Timeout after {result.time_taken_sec:.1f}s, distance to goal: {result.final_distance_to_goal:.2f}m"
+        result.details = (
+            f"Timeout after {result.time_taken_sec:.1f}s, "
+            f"distance to goal: {result.final_distance_to_goal:.2f}m"
+        )
 
     finally:
         node.destroy_subscription(odom_sub)
@@ -134,24 +140,17 @@ def assert_follows_path(
     path: List[PoseStamped],
     corridor_width: float = 1.0,
     timeout_sec: float = 60.0,
-    odom_topic: str = "/odom"
+    odom_topic: str = "/odom",
 ) -> NavigationResult:
     """
     Assert that the robot follows a path within a corridor.
 
     Verifies the vehicle stays within corridor_width of the expected path.
-    The robot is considered to have reached the goal when it is within
-    corridor_width of the final waypoint.
-
-    Note:
-        This function temporarily adds the node to an internal executor
-        and removes it when done. The node remains valid after the call.
 
     Args:
         node: ROS 2 node
         path: List of waypoints (must have at least 2)
-        corridor_width: Maximum deviation from path (meters). Also used
-            as the tolerance for reaching the final waypoint.
+        corridor_width: Maximum deviation from path (meters)
         timeout_sec: Maximum time to wait
         odom_topic: Odometry topic to monitor
 
@@ -163,13 +162,12 @@ def assert_follows_path(
             success=False,
             final_distance_to_goal=float('inf'),
             time_taken_sec=0.0,
-            details="Path must have at least 2 waypoints"
+            details="Path must have at least 2 waypoints",
         )
 
     executor = SingleThreadedExecutor()
     executor.add_node(node)
 
-    # Extract path points
     path_points = [(p.pose.position.x, p.pose.position.y) for p in path]
 
     max_deviation = 0.0
@@ -179,17 +177,13 @@ def assert_follows_path(
         nonlocal latest_position, max_deviation
         latest_position = (
             msg.pose.pose.position.x,
-            msg.pose.pose.position.y
+            msg.pose.pose.position.y,
         )
 
-        # Find minimum distance to path
         min_dist = float('inf')
         for i in range(len(path_points) - 1):
-            # Distance to line segment
             dist = _point_to_segment_distance(
-                latest_position,
-                path_points[i],
-                path_points[i + 1]
+                latest_position, path_points[i], path_points[i + 1]
             )
             min_dist = min(min_dist, dist)
 
@@ -198,7 +192,7 @@ def assert_follows_path(
     qos = QoSProfile(
         depth=10,
         reliability=ReliabilityPolicy.BEST_EFFORT,
-        durability=DurabilityPolicy.VOLATILE
+        durability=DurabilityPolicy.VOLATILE,
     )
 
     odom_sub = node.create_subscription(Odometry, odom_topic, odom_callback, qos)
@@ -207,7 +201,7 @@ def assert_follows_path(
         success=False,
         final_distance_to_goal=float('inf'),
         time_taken_sec=0.0,
-        details=""
+        details="",
     )
 
     try:
@@ -217,13 +211,14 @@ def assert_follows_path(
         while time.monotonic() - start_time < timeout_sec:
             executor.spin_once(timeout_sec=0.1)
 
-            # Check if deviation exceeds corridor
             if max_deviation > corridor_width:
                 result.time_taken_sec = time.monotonic() - start_time
-                result.details = f"Exceeded corridor width: {max_deviation:.2f}m > {corridor_width}m"
+                result.details = (
+                    f"Exceeded corridor width: "
+                    f"{max_deviation:.2f}m > {corridor_width}m"
+                )
                 return result
 
-            # Check if reached goal
             if latest_position is not None:
                 distance = _distance_2d(latest_position, goal)
                 result.final_distance_to_goal = distance
@@ -231,7 +226,9 @@ def assert_follows_path(
                 if distance <= corridor_width:
                     result.success = True
                     result.time_taken_sec = time.monotonic() - start_time
-                    result.details = f"Followed path, max deviation: {max_deviation:.2f}m"
+                    result.details = (
+                        f"Followed path, max deviation: {max_deviation:.2f}m"
+                    )
                     return result
 
         result.time_taken_sec = time.monotonic() - start_time
@@ -247,7 +244,7 @@ def assert_follows_path(
 def _point_to_segment_distance(
     point: Tuple[float, float],
     seg_start: Tuple[float, float],
-    seg_end: Tuple[float, float]
+    seg_end: Tuple[float, float],
 ) -> float:
     """Calculate distance from point to line segment."""
     px, py = point
@@ -271,14 +268,12 @@ def assert_navigation_action_succeeds(
     node: Node,
     goal_pose: PoseStamped,
     timeout_sec: float = 120.0,
-    action_name: str = "/navigate_to_pose"
+    action_name: str = "/navigate_to_pose",
 ) -> NavigationResult:
     """
     Assert that a navigation action succeeds.
 
-    Sends a NavigateToPose action and waits for completion. Creates a
-    temporary node internally for the action client (does not use the
-    passed node).
+    Sends a NavigateToPose action and waits for completion.
 
     Args:
         node: ROS 2 node (unused, kept for API consistency)
@@ -287,13 +282,11 @@ def assert_navigation_action_succeeds(
         action_name: Action server name
 
     Returns:
-        NavigationResult with:
-        - success: True if action status is SUCCEEDED (status code 4)
-        - final_distance_to_goal: 0.0 on success, inf on failure
-        - time_taken_sec: Time from goal submission to result
-        - details: Status message including failure status code if applicable
+        NavigationResult with success status
     """
-    temp_node = rclpy.create_node(f"nav_action_client_{int(time.time() * 1000) % 10000}")
+    temp_node = rclpy.create_node(
+        f"nav_action_client_{int(time.time() * 1000) % 10000}"
+    )
     executor = SingleThreadedExecutor()
     executor.add_node(temp_node)
 
@@ -303,16 +296,14 @@ def assert_navigation_action_succeeds(
         success=False,
         final_distance_to_goal=float('inf'),
         time_taken_sec=0.0,
-        details=""
+        details="",
     )
 
     try:
-        # Wait for action server
         if not action_client.wait_for_server(timeout_sec=10.0):
             result.details = f"Action server {action_name} not available"
             return result
 
-        # Send goal
         goal_msg = NavigateToPose.Goal()
         goal_msg.pose = goal_pose
 
@@ -320,7 +311,6 @@ def assert_navigation_action_succeeds(
 
         start_time = time.monotonic()
 
-        # Wait for goal acceptance
         while not send_goal_future.done():
             executor.spin_once(timeout_sec=0.1)
             if time.monotonic() - start_time > timeout_sec:
@@ -332,7 +322,6 @@ def assert_navigation_action_succeeds(
             result.details = "Goal was rejected"
             return result
 
-        # Wait for result
         result_future = goal_handle.get_result_async()
 
         while not result_future.done():
@@ -347,9 +336,13 @@ def assert_navigation_action_succeeds(
         if action_result.status == 4:  # SUCCEEDED
             result.success = True
             result.final_distance_to_goal = 0.0
-            result.details = f"Navigation succeeded in {result.time_taken_sec:.1f}s"
+            result.details = (
+                f"Navigation succeeded in {result.time_taken_sec:.1f}s"
+            )
         else:
-            result.details = f"Navigation failed with status {action_result.status}"
+            result.details = (
+                f"Navigation failed with status {action_result.status}"
+            )
 
     finally:
         action_client.destroy()
@@ -364,7 +357,7 @@ def assert_costmap_contains_obstacle(
     position: Tuple[float, float],
     costmap_topic: str = "/local_costmap/costmap",
     min_cost: int = 100,
-    timeout_sec: float = 5.0
+    timeout_sec: float = 5.0,
 ) -> bool:
     """
     Assert that the costmap contains an obstacle at a position.
@@ -381,50 +374,37 @@ def assert_costmap_contains_obstacle(
     Returns:
         True if obstacle found at position
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
-    costmap_msg: Optional[OccupancyGrid] = None
-
-    def callback(msg: OccupancyGrid):
-        nonlocal costmap_msg
-        costmap_msg = msg
-
-    qos = QoSProfile(
+    costmap_qos = QoSProfile(
         depth=1,
         reliability=ReliabilityPolicy.RELIABLE,
-        durability=DurabilityPolicy.VOLATILE
+        durability=DurabilityPolicy.VOLATILE,
     )
 
-    sub = node.create_subscription(OccupancyGrid, costmap_topic, callback, qos)
+    obs = latest_message(costmap_topic, OccupancyGrid, qos=costmap_qos)
+    result = obs.run_standalone(node, timeout_sec)
 
-    try:
-        start_time = time.monotonic()
-        while costmap_msg is None and time.monotonic() - start_time < timeout_sec:
-            executor.spin_once(timeout_sec=0.1)
+    costmap_msg = result.value
+    if costmap_msg is None:
+        return False
 
-        if costmap_msg is None:
-            return False
+    # Convert position to grid coordinates
+    origin_x = costmap_msg.info.origin.position.x
+    origin_y = costmap_msg.info.origin.position.y
+    resolution = costmap_msg.info.resolution
+    width = costmap_msg.info.width
 
-        # Convert position to grid coordinates
-        origin_x = costmap_msg.info.origin.position.x
-        origin_y = costmap_msg.info.origin.position.y
-        resolution = costmap_msg.info.resolution
-        width = costmap_msg.info.width
+    grid_x = int((position[0] - origin_x) / resolution)
+    grid_y = int((position[1] - origin_y) / resolution)
 
-        grid_x = int((position[0] - origin_x) / resolution)
-        grid_y = int((position[1] - origin_y) / resolution)
+    # Check bounds
+    if (
+        grid_x < 0 or grid_x >= width
+        or grid_y < 0 or grid_y >= costmap_msg.info.height
+    ):
+        return False
 
-        # Check bounds
-        if grid_x < 0 or grid_x >= width or grid_y < 0 or grid_y >= costmap_msg.info.height:
-            return False
+    # Get cost at position
+    index = grid_y * width + grid_x
+    cost = costmap_msg.data[index]
 
-        # Get cost at position
-        index = grid_y * width + grid_x
-        cost = costmap_msg.data[index]
-
-        return cost >= min_cost
-
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
+    return cost >= min_cost

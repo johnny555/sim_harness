@@ -5,21 +5,40 @@
 Sensor data validation assertions.
 
 Provides functions to validate sensor data from ROS 2 topics.
+
+Implementation uses :class:`TopicObserver` for subscription lifecycle
+and composable predicates from :mod:`sim_harness.core.predicates` for
+validation logic. All public signatures are unchanged.
 """
 
 import math
-import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
-import rclpy
-from rclpy.node import Node
-from rclpy.executors import SingleThreadedExecutor
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from sensor_msgs.msg import NavSatFix, Imu, Image, JointState, LaserScan
 
-from sensor_msgs.msg import PointCloud2, NavSatFix, Imu, Image, JointState, LaserScan
-
-from sim_harness.core.spin_helpers import spin_for_duration
+from sim_harness.core.topic_observer import (
+    collect_messages,
+    count_messages,
+    SENSOR_QOS,
+)
+from sim_harness.core.stream_properties import all_of
+from sim_harness.core.predicates import (
+    scan_has_min_points,
+    scan_ranges_within,
+    scan_nan_ratio_below,
+    imu_no_nan,
+    imu_accel_within,
+    imu_gyro_within,
+    image_has_data,
+    image_dimensions,
+    image_encoding,
+    gps_no_nan,
+    gps_in_bounds,
+    gps_has_fix,
+    joints_present,
+    joints_no_nan,
+)
 
 
 @dataclass
@@ -40,18 +59,15 @@ class SensorDataResult:
 
 
 def assert_sensor_publishing(
-    node: Node,
+    node,
     topic: str,
     expected_rate_hz: float,
     msg_type: type = LaserScan,
     tolerance_percent: float = 10.0,
-    sample_duration_sec: float = 5.0
+    sample_duration_sec: float = 5.0,
 ) -> SensorDataResult:
     """
     Assert that a sensor is publishing at the expected rate.
-
-    Subscribes to the topic with the specified message type to count
-    messages and calculate the publish rate.
 
     Args:
         node: ROS 2 node
@@ -64,39 +80,12 @@ def assert_sensor_publishing(
     Returns:
         SensorDataResult with publish rate info
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
+    obs = count_messages(topic, msg_type, qos=SENSOR_QOS)
+    result = obs.run_standalone(node, sample_duration_sec)
 
-    message_count = 0
+    message_count = result.value
+    publish_rate = result.publish_rate_hz
 
-    def callback(msg):
-        nonlocal message_count
-        message_count += 1
-
-    # Create subscription with specified message type
-    qos = QoSProfile(
-        depth=100,
-        reliability=ReliabilityPolicy.BEST_EFFORT,
-        durability=DurabilityPolicy.VOLATILE
-    )
-
-    sub = node.create_subscription(
-        msg_type,
-        topic,
-        callback,
-        qos
-    )
-
-    try:
-        spin_for_duration(executor, sample_duration_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
-
-    # Calculate rate
-    publish_rate = message_count / sample_duration_sec if sample_duration_sec > 0 else 0
-
-    # Check tolerance
     if expected_rate_hz > 0:
         deviation = abs(publish_rate - expected_rate_hz) / expected_rate_hz * 100
         valid = deviation <= tolerance_percent
@@ -104,23 +93,26 @@ def assert_sensor_publishing(
         valid = message_count > 0
         deviation = 0
 
-    details = f"Rate: {publish_rate:.1f} Hz, Expected: {expected_rate_hz:.1f} Hz, Deviation: {deviation:.1f}%"
+    details = (
+        f"Rate: {publish_rate:.1f} Hz, Expected: {expected_rate_hz:.1f} Hz, "
+        f"Deviation: {deviation:.1f}%"
+    )
 
     return SensorDataResult(
         valid=valid,
         message_count=message_count,
         publish_rate_hz=publish_rate,
-        details=details
+        details=details,
     )
 
 
 def assert_lidar_valid(
-    node: Node,
+    node,
     topic: str,
     min_range: float = 0.1,
     max_range: float = 100.0,
     min_points: int = 100,
-    timeout_sec: float = 5.0
+    timeout_sec: float = 5.0,
 ) -> SensorDataResult:
     """
     Assert that LIDAR data is valid.
@@ -129,10 +121,6 @@ def assert_lidar_valid(
     - Messages are being received
     - Scan has minimum number of valid points
     - Range values are within bounds (no NaN, within sensor limits)
-
-    Note:
-        This function temporarily adds the node to an internal executor
-        and removes it when done. Currently only supports LaserScan messages.
 
     Args:
         node: ROS 2 node
@@ -145,56 +133,35 @@ def assert_lidar_valid(
     Returns:
         SensorDataResult with validation status and point statistics
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
-    messages: List[LaserScan] = []
-
-    def callback(msg: LaserScan):
-        messages.append(msg)
-
-    qos = QoSProfile(
-        depth=10,
-        reliability=ReliabilityPolicy.BEST_EFFORT,
-        durability=DurabilityPolicy.VOLATILE
-    )
-
-    sub = node.create_subscription(LaserScan, topic, callback, qos)
-
-    try:
-        spin_for_duration(executor, timeout_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
+    obs = collect_messages(topic, LaserScan, qos=SENSOR_QOS)
+    result = obs.run_standalone(node, timeout_sec)
+    messages = result.value
 
     if not messages:
         return SensorDataResult(
             valid=False,
             message_count=0,
             publish_rate_hz=0.0,
-            details=f"No LIDAR messages received on {topic}"
+            details=f"No LIDAR messages received on {topic}",
         )
 
-    # Validate latest message
     scan = messages[-1]
+
+    valid = all_of(
+        scan_has_min_points(min_points),
+        scan_ranges_within(min_range, max_range),
+        scan_nan_ratio_below(0.1),
+    )(scan)
+
+    # Diagnostic details
     num_points = len(scan.ranges)
     nan_count = sum(1 for r in scan.ranges if math.isnan(r))
     inf_count = sum(1 for r in scan.ranges if math.isinf(r))
     valid_count = num_points - nan_count - inf_count
-
-    # Check valid range values
-    out_of_range = 0
-    for r in scan.ranges:
-        if not math.isnan(r) and not math.isinf(r):
-            if r < min_range or r > max_range:
-                out_of_range += 1
-
-    valid = (
-        valid_count >= min_points and
-        nan_count < num_points * 0.1  # Less than 10% NaN
+    out_of_range = sum(
+        1 for r in scan.ranges
+        if math.isfinite(r) and (r < min_range or r > max_range)
     )
-
-    publish_rate = len(messages) / timeout_sec
 
     details = (
         f"Points: {num_points}, Valid: {valid_count}, "
@@ -203,20 +170,20 @@ def assert_lidar_valid(
 
     return SensorDataResult(
         valid=valid,
-        message_count=len(messages),
-        publish_rate_hz=publish_rate,
-        details=details
+        message_count=result.message_count,
+        publish_rate_hz=result.publish_rate_hz,
+        details=details,
     )
 
 
 def assert_gps_valid(
-    node: Node,
+    node,
     topic: str,
     min_lat: float,
     max_lat: float,
     min_lon: float,
     max_lon: float,
-    timeout_sec: float = 5.0
+    timeout_sec: float = 5.0,
 ) -> SensorDataResult:
     """
     Assert that GPS data is valid and within a region.
@@ -239,54 +206,30 @@ def assert_gps_valid(
     Returns:
         SensorDataResult
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
-    messages: List[NavSatFix] = []
-
-    def callback(msg: NavSatFix):
-        messages.append(msg)
-
-    qos = QoSProfile(
-        depth=10,
-        reliability=ReliabilityPolicy.BEST_EFFORT,
-        durability=DurabilityPolicy.VOLATILE
-    )
-
-    sub = node.create_subscription(NavSatFix, topic, callback, qos)
-
-    try:
-        spin_for_duration(executor, timeout_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
+    obs = collect_messages(topic, NavSatFix, qos=SENSOR_QOS)
+    result = obs.run_standalone(node, timeout_sec)
+    messages = result.value
 
     if not messages:
         return SensorDataResult(
             valid=False,
             message_count=0,
             publish_rate_hz=0.0,
-            details=f"No GPS messages received on {topic}"
+            details=f"No GPS messages received on {topic}",
         )
 
-    # Validate latest message
     fix = messages[-1]
 
-    # Check for NaN
-    has_nan = math.isnan(fix.latitude) or math.isnan(fix.longitude)
+    valid = all_of(
+        gps_no_nan(),
+        gps_in_bounds(min_lat, max_lat, min_lon, max_lon),
+        gps_has_fix(),
+    )(fix)
 
-    # Check bounds
     in_bounds = (
-        min_lat <= fix.latitude <= max_lat and
-        min_lon <= fix.longitude <= max_lon
+        min_lat <= fix.latitude <= max_lat
+        and min_lon <= fix.longitude <= max_lon
     )
-
-    # Check fix status (>= 0 is valid)
-    has_fix = fix.status.status >= 0
-
-    valid = not has_nan and in_bounds and has_fix
-
-    publish_rate = len(messages) / timeout_sec
 
     details = (
         f"Lat: {fix.latitude:.6f}, Lon: {fix.longitude:.6f}, "
@@ -295,18 +238,18 @@ def assert_gps_valid(
 
     return SensorDataResult(
         valid=valid,
-        message_count=len(messages),
-        publish_rate_hz=publish_rate,
-        details=details
+        message_count=result.message_count,
+        publish_rate_hz=result.publish_rate_hz,
+        details=details,
     )
 
 
 def assert_imu_valid(
-    node: Node,
+    node,
     topic: str,
     max_acceleration: float = 50.0,
     max_angular_velocity: float = 10.0,
-    timeout_sec: float = 5.0
+    timeout_sec: float = 5.0,
 ) -> SensorDataResult:
     """
     Assert that IMU data is valid.
@@ -327,90 +270,54 @@ def assert_imu_valid(
     Returns:
         SensorDataResult
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
-    messages: List[Imu] = []
-
-    def callback(msg: Imu):
-        messages.append(msg)
-
-    qos = QoSProfile(
-        depth=10,
-        reliability=ReliabilityPolicy.BEST_EFFORT,
-        durability=DurabilityPolicy.VOLATILE
-    )
-
-    sub = node.create_subscription(Imu, topic, callback, qos)
-
-    try:
-        spin_for_duration(executor, timeout_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
+    obs = collect_messages(topic, Imu, qos=SENSOR_QOS)
+    result = obs.run_standalone(node, timeout_sec)
+    messages = result.value
 
     if not messages:
         return SensorDataResult(
             valid=False,
             message_count=0,
             publish_rate_hz=0.0,
-            details=f"No IMU messages received on {topic}"
+            details=f"No IMU messages received on {topic}",
         )
 
-    # Validate latest message
     imu = messages[-1]
 
-    # Check for NaN
-    accel_nan = any(math.isnan(x) for x in [
-        imu.linear_acceleration.x,
-        imu.linear_acceleration.y,
-        imu.linear_acceleration.z
-    ])
-    gyro_nan = any(math.isnan(x) for x in [
-        imu.angular_velocity.x,
-        imu.angular_velocity.y,
-        imu.angular_velocity.z
-    ])
+    valid = all_of(
+        imu_no_nan(),
+        imu_accel_within(max_acceleration),
+        imu_gyro_within(max_angular_velocity),
+    )(imu)
 
-    # Check bounds
-    accel_mag = math.sqrt(
-        imu.linear_acceleration.x ** 2 +
-        imu.linear_acceleration.y ** 2 +
-        imu.linear_acceleration.z ** 2
+    a = imu.linear_acceleration
+    g = imu.angular_velocity
+    accel_mag = math.sqrt(a.x**2 + a.y**2 + a.z**2)
+    gyro_mag = math.sqrt(g.x**2 + g.y**2 + g.z**2)
+    has_nan = not all(
+        math.isfinite(v) for v in [a.x, a.y, a.z, g.x, g.y, g.z]
     )
-    gyro_mag = math.sqrt(
-        imu.angular_velocity.x ** 2 +
-        imu.angular_velocity.y ** 2 +
-        imu.angular_velocity.z ** 2
-    )
-
-    accel_valid = accel_mag <= max_acceleration
-    gyro_valid = gyro_mag <= max_angular_velocity
-
-    valid = not accel_nan and not gyro_nan and accel_valid and gyro_valid
-
-    publish_rate = len(messages) / timeout_sec
 
     details = (
         f"Accel: {accel_mag:.2f} m/s^2, Gyro: {gyro_mag:.2f} rad/s, "
-        f"NaN: {accel_nan or gyro_nan}"
+        f"NaN: {has_nan}"
     )
 
     return SensorDataResult(
         valid=valid,
-        message_count=len(messages),
-        publish_rate_hz=publish_rate,
-        details=details
+        message_count=result.message_count,
+        publish_rate_hz=result.publish_rate_hz,
+        details=details,
     )
 
 
 def assert_camera_valid(
-    node: Node,
+    node,
     topic: str,
     expected_width: int = 0,
     expected_height: int = 0,
     expected_encoding: str = "",
-    timeout_sec: float = 5.0
+    timeout_sec: float = 5.0,
 ) -> SensorDataResult:
     """
     Assert that camera images are valid.
@@ -432,52 +339,28 @@ def assert_camera_valid(
     Returns:
         SensorDataResult
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
-    messages: List[Image] = []
-
-    def callback(msg: Image):
-        messages.append(msg)
-
-    qos = QoSProfile(
-        depth=5,
-        reliability=ReliabilityPolicy.BEST_EFFORT,
-        durability=DurabilityPolicy.VOLATILE
-    )
-
-    sub = node.create_subscription(Image, topic, callback, qos)
-
-    try:
-        spin_for_duration(executor, timeout_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
+    obs = collect_messages(topic, Image, qos=SENSOR_QOS)
+    result = obs.run_standalone(node, timeout_sec)
+    messages = result.value
 
     if not messages:
         return SensorDataResult(
             valid=False,
             message_count=0,
             publish_rate_hz=0.0,
-            details=f"No camera messages received on {topic}"
+            details=f"No camera messages received on {topic}",
         )
 
-    # Validate latest message
     img = messages[-1]
 
-    # Check dimensions
-    width_ok = expected_width == 0 or img.width == expected_width
-    height_ok = expected_height == 0 or img.height == expected_height
+    # Build predicate dynamically based on which checks are requested
+    checks = [image_has_data()]
+    if expected_width > 0 and expected_height > 0:
+        checks.append(image_dimensions(expected_width, expected_height))
+    if expected_encoding:
+        checks.append(image_encoding(expected_encoding))
 
-    # Check encoding
-    encoding_ok = expected_encoding == "" or img.encoding == expected_encoding
-
-    # Check data is non-empty
-    has_data = len(img.data) > 0
-
-    valid = width_ok and height_ok and encoding_ok and has_data
-
-    publish_rate = len(messages) / timeout_sec
+    valid = all_of(*checks)(img)
 
     details = (
         f"Size: {img.width}x{img.height}, Encoding: {img.encoding}, "
@@ -486,17 +369,17 @@ def assert_camera_valid(
 
     return SensorDataResult(
         valid=valid,
-        message_count=len(messages),
-        publish_rate_hz=publish_rate,
-        details=details
+        message_count=result.message_count,
+        publish_rate_hz=result.publish_rate_hz,
+        details=details,
     )
 
 
 def assert_joint_states_valid(
-    node: Node,
+    node,
     topic: str,
     expected_joints: List[str],
-    timeout_sec: float = 5.0
+    timeout_sec: float = 5.0,
 ) -> SensorDataResult:
     """
     Assert that joint states contain expected joints.
@@ -515,70 +398,36 @@ def assert_joint_states_valid(
     Returns:
         SensorDataResult
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
-    messages: List[JointState] = []
-
-    def callback(msg: JointState):
-        messages.append(msg)
-
-    qos = QoSProfile(
-        depth=10,
-        reliability=ReliabilityPolicy.BEST_EFFORT,
-        durability=DurabilityPolicy.VOLATILE
-    )
-
-    sub = node.create_subscription(JointState, topic, callback, qos)
-
-    try:
-        spin_for_duration(executor, timeout_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
+    obs = collect_messages(topic, JointState, qos=SENSOR_QOS)
+    result = obs.run_standalone(node, timeout_sec)
+    messages = result.value
 
     if not messages:
         return SensorDataResult(
             valid=False,
             message_count=0,
             publish_rate_hz=0.0,
-            details=f"No joint state messages received on {topic}"
+            details=f"No joint state messages received on {topic}",
         )
 
-    # Validate latest message
     js = messages[-1]
 
-    # Check all expected joints are present
+    valid = all_of(
+        joints_present(expected_joints),
+        joints_no_nan(),
+    )(js)
+
     missing_joints = [j for j in expected_joints if j not in js.name]
-
-    # Check for NaN values
-    has_nan = False
-    for positions in js.position:
-        if math.isnan(positions):
-            has_nan = True
-            break
-    for velocity in js.velocity:
-        if math.isnan(velocity):
-            has_nan = True
-            break
-    for effort in js.effort:
-        if math.isnan(effort):
-            has_nan = True
-            break
-
-    valid = len(missing_joints) == 0 and not has_nan
-
-    publish_rate = len(messages) / timeout_sec
 
     details = (
         f"Joints: {js.name}, "
         f"Missing: {missing_joints if missing_joints else 'None'}, "
-        f"NaN: {has_nan}"
+        f"NaN: {not joints_no_nan()(js)}"
     )
 
     return SensorDataResult(
         valid=valid,
-        message_count=len(messages),
-        publish_rate_hz=publish_rate,
-        details=details
+        message_count=result.message_count,
+        publish_rate_hz=result.publish_rate_hz,
+        details=details,
     )

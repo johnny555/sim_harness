@@ -5,21 +5,27 @@
 Timing and latency validation assertions.
 
 Provides functions to validate publish rates and message latency.
+
+Implementation uses :class:`TopicObserver` for the two topic-based
+functions (``assert_publish_rate``, ``assert_latency``). The TF and
+action-server checks remain unchanged because they use their own
+dedicated APIs (tf2_ros, ActionClient).
 """
 
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Type, TypeVar
+from typing import List, Type, TypeVar
 
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.action import ActionClient
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
-from builtin_interfaces.msg import Time as TimeMsg
-
-from sim_harness.core.spin_helpers import spin_for_duration
+from sim_harness.core.topic_observer import (
+    TopicObserver,
+    track_timestamps,
+    SENSOR_QOS,
+)
 
 MsgT = TypeVar('MsgT')
 
@@ -53,14 +59,10 @@ def assert_publish_rate(
     msg_type: Type[MsgT],
     expected_rate_hz: float,
     tolerance_percent: float = 10.0,
-    sample_duration_sec: float = 5.0
+    sample_duration_sec: float = 5.0,
 ) -> TimingResult:
     """
     Assert that a topic publishes at the expected rate.
-
-    Note:
-        This function temporarily adds the node to an internal executor
-        and removes it when done. The node remains valid after the call.
 
     Args:
         node: ROS 2 node
@@ -71,34 +73,11 @@ def assert_publish_rate(
         sample_duration_sec: How long to sample
 
     Returns:
-        TimingResult with:
-        - within_bounds: True if measured rate is within tolerance
-        - measured_rate_hz: Actual publish rate observed
-        - min_interval_ms, max_interval_ms, avg_interval_ms: Inter-message
-          intervals (stored in min_latency_ms, max_latency_ms, avg_latency_ms
-          fields for API compatibility)
+        TimingResult with rate and interval statistics
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
-    message_times: List[float] = []
-
-    def callback(msg):
-        message_times.append(time.monotonic())
-
-    qos = QoSProfile(
-        depth=100,
-        reliability=ReliabilityPolicy.BEST_EFFORT,
-        durability=DurabilityPolicy.VOLATILE
-    )
-
-    sub = node.create_subscription(msg_type, topic, callback, qos)
-
-    try:
-        spin_for_duration(executor, sample_duration_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
+    obs = track_timestamps(topic, msg_type, qos=SENSOR_QOS)
+    obs_result = obs.run_standalone(node, sample_duration_sec)
+    message_times = obs_result.value
 
     result = TimingResult(
         within_bounds=False,
@@ -106,19 +85,19 @@ def assert_publish_rate(
         min_latency_ms=0.0,
         max_latency_ms=0.0,
         avg_latency_ms=0.0,
-        details=""
+        details="",
     )
 
     if len(message_times) < 2:
         result.details = f"Not enough messages received ({len(message_times)})"
         return result
 
-    # Calculate rate
-    result.measured_rate_hz = (len(message_times) - 1) / (message_times[-1] - message_times[0])
+    result.measured_rate_hz = (
+        (len(message_times) - 1) / (message_times[-1] - message_times[0])
+    )
 
-    # Calculate inter-message intervals
     intervals = [
-        (message_times[i] - message_times[i-1]) * 1000
+        (message_times[i] - message_times[i - 1]) * 1000
         for i in range(1, len(message_times))
     ]
 
@@ -126,9 +105,10 @@ def assert_publish_rate(
     result.max_latency_ms = max(intervals)
     result.avg_latency_ms = sum(intervals) / len(intervals)
 
-    # Check tolerance
     if expected_rate_hz > 0:
-        deviation = abs(result.measured_rate_hz - expected_rate_hz) / expected_rate_hz * 100
+        deviation = (
+            abs(result.measured_rate_hz - expected_rate_hz) / expected_rate_hz * 100
+        )
         result.within_bounds = deviation <= tolerance_percent
     else:
         result.within_bounds = len(message_times) > 0
@@ -147,16 +127,13 @@ def assert_latency(
     topic: str,
     msg_type: Type[MsgT],
     max_latency_ms: float,
-    sample_duration_sec: float = 5.0
+    sample_duration_sec: float = 5.0,
 ) -> TimingResult:
     """
     Assert that message latency is within bounds.
 
     Compares header timestamp to receive time to measure end-to-end latency.
-
-    Note:
-        This function temporarily adds the node to an internal executor
-        and removes it when done. The node remains valid after the call.
+    Uses a custom TopicObserver that computes latencies in the step function.
 
     Args:
         node: ROS 2 node
@@ -166,41 +143,36 @@ def assert_latency(
         sample_duration_sec: How long to sample
 
     Returns:
-        TimingResult with:
-        - within_bounds: True if max observed latency <= max_latency_ms
-        - measured_rate_hz: Message rate during sampling period
-        - min_latency_ms, max_latency_ms, avg_latency_ms: Latency statistics
+        TimingResult with latency statistics
 
     Note:
         Messages without a header.stamp field are silently skipped. If all
         messages lack timestamps, returns with details "No messages with
         timestamps received".
     """
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
+    # Custom observer that accumulates latencies using header timestamps.
+    # We need the node reference inside the step function for clock access,
+    # so we capture it via closure.
+    def _make_latency_step(ros_node: Node):
+        def step(latencies: List[float], msg) -> List[float]:
+            if hasattr(msg, 'header') and hasattr(msg.header, 'stamp'):
+                now = ros_node.get_clock().now()
+                msg_time = rclpy.time.Time.from_msg(msg.header.stamp)
+                latency_ns = now.nanoseconds - msg_time.nanoseconds
+                return latencies + [latency_ns / 1e6]
+            return latencies
+        return step
 
-    latencies: List[float] = []
-
-    def callback(msg):
-        if hasattr(msg, 'header') and hasattr(msg.header, 'stamp'):
-            now = node.get_clock().now()
-            msg_time = rclpy.time.Time.from_msg(msg.header.stamp)
-            latency_ns = now.nanoseconds - msg_time.nanoseconds
-            latencies.append(latency_ns / 1e6)  # Convert to ms
-
-    qos = QoSProfile(
-        depth=100,
-        reliability=ReliabilityPolicy.BEST_EFFORT,
-        durability=DurabilityPolicy.VOLATILE
+    obs = TopicObserver(
+        topic=topic,
+        msg_type=msg_type,
+        initial=[],
+        step=_make_latency_step(node),
+        extract=lambda lats: lats,
+        qos=SENSOR_QOS,
     )
-
-    sub = node.create_subscription(msg_type, topic, callback, qos)
-
-    try:
-        spin_for_duration(executor, sample_duration_sec)
-    finally:
-        node.destroy_subscription(sub)
-        executor.remove_node(node)
+    obs_result = obs.run_standalone(node, sample_duration_sec)
+    latencies = obs_result.value
 
     result = TimingResult(
         within_bounds=False,
@@ -208,7 +180,7 @@ def assert_latency(
         min_latency_ms=0.0,
         max_latency_ms=0.0,
         avg_latency_ms=0.0,
-        details=""
+        details="",
     )
 
     if not latencies:
@@ -231,12 +203,15 @@ def assert_latency(
     return result
 
 
+# ---- TF and action-server checks (no TopicObserver — dedicated APIs) ----
+
+
 def assert_transform_available(
     node: Node,
     target_frame: str,
     source_frame: str,
     timeout_sec: float = 5.0,
-    max_age_ms: float = 1000.0
+    max_age_ms: float = 1000.0,
 ) -> bool:
     """
     Assert that a TF transform is available and fresh.
@@ -253,12 +228,14 @@ def assert_transform_available(
     """
     from tf2_ros import Buffer, TransformListener
 
-    temp_node = rclpy.create_node(f"tf_checker_{int(time.time() * 1000) % 10000}")
+    temp_node = rclpy.create_node(
+        f"tf_checker_{int(time.time() * 1000) % 10000}"
+    )
     executor = SingleThreadedExecutor()
     executor.add_node(temp_node)
 
     tf_buffer = Buffer()
-    tf_listener = TransformListener(tf_buffer, temp_node)
+    tf_listener = TransformListener(tf_buffer, temp_node)  # noqa: F841
 
     try:
         start_time = time.monotonic()
@@ -268,14 +245,13 @@ def assert_transform_available(
 
             try:
                 transform = tf_buffer.lookup_transform(
-                    target_frame,
-                    source_frame,
-                    rclpy.time.Time()
+                    target_frame, source_frame, rclpy.time.Time()
                 )
 
-                # Check age
                 now = temp_node.get_clock().now()
-                transform_time = rclpy.time.Time.from_msg(transform.header.stamp)
+                transform_time = rclpy.time.Time.from_msg(
+                    transform.header.stamp
+                )
                 age_ms = (now.nanoseconds - transform_time.nanoseconds) / 1e6
 
                 if age_ms <= max_age_ms:
@@ -295,7 +271,7 @@ def assert_action_server_responsive(
     node: Node,
     action_name: str,
     action_type: Type,
-    max_response_time_ms: float = 1000.0
+    max_response_time_ms: float = 1000.0,
 ) -> bool:
     """
     Assert that an action server responds within timeout.
@@ -309,7 +285,9 @@ def assert_action_server_responsive(
     Returns:
         True if server responds within timeout
     """
-    temp_node = rclpy.create_node(f"action_latency_checker_{int(time.time() * 1000) % 10000}")
+    temp_node = rclpy.create_node(
+        f"action_latency_checker_{int(time.time() * 1000) % 10000}"
+    )
     executor = SingleThreadedExecutor()
     executor.add_node(temp_node)
 
@@ -317,7 +295,9 @@ def assert_action_server_responsive(
 
     try:
         start_time = time.monotonic()
-        available = action_client.wait_for_server(timeout_sec=max_response_time_ms / 1000.0)
+        available = action_client.wait_for_server(
+            timeout_sec=max_response_time_ms / 1000.0
+        )
         response_time_ms = (time.monotonic() - start_time) * 1000
 
         return available and response_time_ms <= max_response_time_ms
