@@ -5,8 +5,8 @@
 """
 TurtleBot3 Integration Test with Automatic Simulation Control.
 
-This example demonstrates how to use SimulationTestFixture to automatically
-start and stop the simulation during tests.
+This example demonstrates how to use SimTestFixture with LAUNCH_PACKAGE /
+LAUNCH_FILE to automatically start and stop the simulation during tests.
 
 The test framework will:
 1. Start TurtleBot3 Gazebo simulation before tests
@@ -32,16 +32,18 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TwistStamped
 
 from sim_harness import (
-    SimulationTestFixture,
+    SimTestFixture,
+    SimulationTestFixture,  # backwards compat alias for SimTestFixture
     ValidationResultCollector,
 )
 
 
 @pytest.mark.integration
-class TestTurtleBot3WithSimControl(SimulationTestFixture):
+class TestTurtleBot3WithSimControl(SimTestFixture):
     """
     Integration tests with automatic simulation control.
 
+    Set LAUNCH_PACKAGE and LAUNCH_FILE to enable automatic sim management.
     The simulation is automatically started before tests and stopped after.
     """
 
@@ -171,12 +173,13 @@ class TestTurtleBot3WithSimControl(SimulationTestFixture):
 
 @pytest.mark.integration
 @pytest.mark.requires_sim
-class TestTurtleBot3UseExisting(SimulationTestFixture):
+class TestTurtleBot3UseExisting(SimTestFixture):
     """
     Alternative: Use existing simulation (don't start/stop).
 
     Use this if you want to start the simulation manually or from
-    a separate terminal.
+    a separate terminal.  Omit LAUNCH_PACKAGE/LAUNCH_FILE and set
+    USE_EXISTING_SIM = True.
     """
 
     USE_EXISTING_SIM = True  # Don't start simulation, assume it's running

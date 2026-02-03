@@ -40,30 +40,29 @@ from geometry_msgs.msg import TwistStamped
 
 from sim_harness import SimTestFixture
 
-# FP-inspired combinators (from previous implementation)
-from sim_harness.core.stream_properties import for_all_messages, all_of
-from sim_harness.core.predicates import (
+# Composable predicates — import from their purpose-bucket
+from sim_harness.checks import all_of
+from sim_harness.checks.sensors import (
     scan_has_min_points,
     scan_ranges_within,
     scan_nan_ratio_below,
     imu_accel_within,
     imu_no_nan,
+)
+from sim_harness.checks.motion import (
     odom_position_finite,
     odom_velocity_below,
 )
 
-# Hypothesis property-based testing
-from sim_harness.core.sim_property import (
+# Property-based testing — single import path
+from sim_harness.core.hypothesis import (
     sim_property,
     check_recorded_property,
     check_recorded_eventually,
     check_recorded_monotonic,
     hypothesis_check_recorded,
-)
-from sim_harness.core.strategies import (
     twist_strategy,
     navigation_goal_2d,
-    threshold_strategy,
     speed_strategy,
 )
 

@@ -1,14 +1,17 @@
 # Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Core test infrastructure for ROS 2 simulation testing."""
+"""
+Core test infrastructure for ROS 2 simulation testing.
+
+For check functions, prefer importing from ``sim_harness.checks.*``
+which organizes everything by purpose (readiness, sensors, motion,
+navigation, perception).
+
+This module re-exports the internal building blocks for advanced use.
+"""
 
 from sim_harness.core.test_fixture import SimTestFixture
-from sim_harness.core.simulation_fixture import (
-    SimulationTestFixture,
-    simulation_manager,
-    session_simulation,
-)
 from sim_harness.core.message_collector import MessageCollector
 from sim_harness.core.spin_helpers import (
     spin_for_duration,
@@ -40,15 +43,6 @@ from sim_harness.core.topic_observer import (
     track_max,
     track_timestamps,
 )
-from sim_harness.core.stream_properties import (
-    PropertyResult,
-    for_all_messages,
-    eventually,
-    monotonic,
-    all_of,
-    any_of,
-    negate,
-)
 from sim_harness.core.sim_property import (
     sim_property,
     PropertyFailure,
@@ -56,9 +50,6 @@ from sim_harness.core.sim_property import (
 
 __all__ = [
     'SimTestFixture',
-    'SimulationTestFixture',
-    'simulation_manager',
-    'session_simulation',
     'MessageCollector',
     'spin_for_duration',
     'spin_until_condition',
@@ -74,7 +65,7 @@ __all__ = [
     'CheckStatus',
     'CheckCategory',
     'create_standard_check',
-    # TopicObserver (FP fold combinator)
+    # TopicObserver
     'TopicObserver',
     'ObservationResult',
     'ParallelObserver',
@@ -84,15 +75,7 @@ __all__ = [
     'latest_message',
     'track_max',
     'track_timestamps',
-    # Stream properties (Hedgehog-inspired)
-    'PropertyResult',
-    'for_all_messages',
-    'eventually',
-    'monotonic',
-    'all_of',
-    'any_of',
-    'negate',
-    # Hypothesis property-based testing
+    # Property-based testing
     'sim_property',
     'PropertyFailure',
 ]

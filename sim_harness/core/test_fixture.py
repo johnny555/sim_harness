@@ -2,13 +2,34 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Base test fixture for ROS 2 simulation tests.
+Test fixture for ROS 2 simulation tests.
 
-Provides pytest fixtures with automatic ROS 2 node lifecycle management.
+Provides :class:`SimTestFixture` — the single entry point for all
+sim_harness tests. Set ``LAUNCH_PACKAGE`` / ``LAUNCH_FILE`` class
+attributes to enable automatic Gazebo lifecycle management; leave
+them empty for tests that only need a ROS 2 node.
+
+Example (with simulation)::
+
+    class TestMyRobot(SimTestFixture):
+        LAUNCH_PACKAGE = 'turtlebot3_gazebo'
+        LAUNCH_FILE = 'turtlebot3_world.launch.py'
+        WORLD = 'turtlebot3_world'
+
+        def test_sensor_publishes(self):
+            collector = self.create_message_collector('/scan', LaserScan)
+            self.spin_for_duration(5.0)
+            assert collector.count() > 0
+
+Example (ROS-only, no sim management)::
+
+    class TestMyNode(SimTestFixture):
+        def test_service_available(self):
+            from sim_harness.checks.readiness import assert_node_running
+            assert assert_node_running(self.node, 'my_node')
 """
 
-import time
-from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
+from typing import Any, Callable, Dict, Optional, Type, TypeVar
 
 import pytest
 import rclpy
@@ -36,60 +57,80 @@ class SimTestFixture(RequirementValidator):
     """
     Base class for ROS 2 simulation integration tests.
 
-    Provides common utilities for simulation testing:
+    Provides:
+
     - Automatic ROS 2 node creation/destruction per test
+    - Optional Gazebo simulation lifecycle (set ``LAUNCH_PACKAGE``)
     - Message collection on arbitrary topics
     - Spin helpers for waiting on messages or conditions
-    - Test isolation configuration
+    - Test isolation (unique ROS_DOMAIN_ID per test)
     - Requirements validation support
 
-    Usage with pytest:
-        class TestMyRobot(SimTestFixture):
-            def test_sensor_publishes(self):
-                collector = self.create_message_collector('/scan', LaserScan)
-                self.spin_for_duration(5.0)
-                assert collector.count() > 0, "No scan messages received"
+    Simulation management attributes (set on subclass to enable):
+
+    - ``LAUNCH_PACKAGE``: ROS package containing the launch file
+    - ``LAUNCH_FILE``: Launch file name
+    - ``LAUNCH_ARGS``: Dict of additional launch arguments
+    - ``WORLD``: World name (used to determine if restart is needed)
+    - ``ROBOT_MODEL``: Robot model name (used for restart decisions)
+    - ``STARTUP_TIMEOUT``: Max seconds to wait for simulation start
+    - ``GAZEBO_STARTUP_DELAY``: Extra wait after Gazebo reports ready
+    - ``REQUIRE_SIM``: If True, skip tests when sim can't start
+    - ``USE_EXISTING_SIM``: If True, don't manage sim lifecycle
+
+    Simulations are automatically reused when configs match across
+    test classes, and restarted when they differ.
     """
 
     # Class-level ROS 2 initialization tracking
     _rclpy_initialized: bool = False
 
+    # --- Simulation management (optional) ---
+    LAUNCH_PACKAGE: str = ""
+    LAUNCH_FILE: str = ""
+    LAUNCH_ARGS: dict = {}
+    WORLD: str = ""
+    ROBOT_MODEL: str = ""
+    STARTUP_TIMEOUT: float = 60.0
+    GAZEBO_STARTUP_DELAY: float = 5.0
+    REQUIRE_SIM: bool = True
+    USE_EXISTING_SIM: bool = False
+
     @pytest.fixture(autouse=True)
     def setup_ros(self) -> None:
         """
-        Pytest fixture for ROS 2 setup/teardown.
+        Pytest fixture for full setup/teardown.
 
-        Automatically runs before and after each test method.
+        Handles simulation lifecycle (if configured), then ROS 2
+        node creation, then calls ``on_setup()``. Reverses on teardown.
         """
-        # Setup
+        # Step 1: Simulation management
+        sim_managed = self._setup_simulation()
+
+        # Step 2: ROS node setup
         self._setup_test()
         try:
-            self.on_setup()  # Hook for subclass setup
+            self.on_setup()
         except BaseException:
-            # Cleanup if on_setup fails (including pytest.skip)
-            # Without this, the node is never destroyed, corrupting rclpy context
             self.on_teardown()
             self._teardown_test()
+            if sim_managed:
+                self._release_simulation()
             raise
+
         yield
-        # Teardown
-        self.on_teardown()  # Hook for subclass teardown
+
+        # Teardown (reverse order)
+        self.on_teardown()
         self._teardown_test()
+        if sim_managed:
+            self._release_simulation()
 
     def on_setup(self) -> None:
         """
         Hook for subclass setup after ROS initialization.
 
-        Override this method in subclasses to perform additional setup
-        after the ROS node and executor are initialized. This is the
-        proper place to create TF listeners, publishers, collectors, etc.
-
-        Example:
-            class TestMyRobot(SimTestFixture):
-                def on_setup(self):
-                    self.tf_buffer = Buffer()
-                    self.tf_listener = TransformListener(self.tf_buffer, self.node)
-                    self.cmd_pub = self.node.create_publisher(Twist, '/cmd_vel', 10)
+        Override this to create TF listeners, publishers, collectors, etc.
         """
         pass
 
@@ -97,67 +138,134 @@ class SimTestFixture(RequirementValidator):
         """
         Hook for subclass teardown before ROS cleanup.
 
-        Override this method in subclasses to perform cleanup before
-        the ROS node is destroyed. Use this to destroy publishers,
-        timers, or other resources created in on_setup().
+        Override this to destroy publishers, timers, or other resources.
         """
         pass
 
+    # -----------------------------------------------------------------
+    # Simulation lifecycle (lazy imports — no Gazebo dependency if unused)
+    # -----------------------------------------------------------------
+
+    def _setup_simulation(self) -> bool:
+        """
+        Start or reuse a simulation if configured.
+
+        Returns True if simulation was actively managed (needs release).
+        """
+        cls = self.__class__
+
+        if cls.USE_EXISTING_SIM:
+            try:
+                from sim_harness.simulator.gazebo_backend import GazeboBackend
+                if not GazeboBackend().is_running() and cls.REQUIRE_SIM:
+                    pytest.skip(
+                        "Simulation not running and USE_EXISTING_SIM=True"
+                    )
+            except ImportError:
+                if cls.REQUIRE_SIM:
+                    pytest.skip("Gazebo backend not available")
+            return False
+
+        if not cls.LAUNCH_PACKAGE or not cls.LAUNCH_FILE:
+            return False
+
+        try:
+            from sim_harness.simulator.simulation_manager import (
+                SimulationRequest,
+                get_simulation_manager,
+            )
+        except ImportError:
+            if cls.REQUIRE_SIM:
+                pytest.skip("sim_harness.simulator not available")
+            return False
+
+        manager = get_simulation_manager()
+        sim_request = SimulationRequest(
+            package=cls.LAUNCH_PACKAGE,
+            launch_file=cls.LAUNCH_FILE,
+            launch_args=cls.LAUNCH_ARGS,
+            world=cls.WORLD,
+            robot_model=cls.ROBOT_MODEL,
+        )
+
+        try:
+            success = manager.request(
+                sim_request,
+                startup_timeout=cls.STARTUP_TIMEOUT,
+                gazebo_delay=cls.GAZEBO_STARTUP_DELAY,
+                require_sim=cls.REQUIRE_SIM,
+            )
+            if not success and cls.REQUIRE_SIM:
+                pytest.skip(
+                    f"Failed to start simulation: "
+                    f"{cls.LAUNCH_PACKAGE}/{cls.LAUNCH_FILE}"
+                )
+                return False
+        except RuntimeError as e:
+            if cls.REQUIRE_SIM:
+                pytest.skip(str(e))
+            return False
+
+        return True
+
+    def _release_simulation(self) -> None:
+        """Release the simulation (but don't stop — allow reuse)."""
+        try:
+            from sim_harness.simulator.simulation_manager import (
+                get_simulation_manager,
+            )
+            get_simulation_manager().release()
+        except ImportError:
+            pass
+
+    # -----------------------------------------------------------------
+    # ROS 2 node lifecycle
+    # -----------------------------------------------------------------
+
     def _setup_test(self) -> None:
         """Initialize ROS 2 node and executor for the test."""
-        # Apply test isolation BEFORE rclpy.init() so the ROS_DOMAIN_ID
-        # environment variable is set when the DDS participant is created.
         self._isolation_config = get_test_isolation_config()
         apply_test_isolation(self._isolation_config)
 
-        # Initialize rclpy if needed, or re-initialize if context became invalid
         if not SimTestFixture._rclpy_initialized:
             rclpy.init()
             SimTestFixture._rclpy_initialized = True
         else:
-            # Check if context is still valid (can become invalid after exceptions)
             try:
                 context = rclpy.get_default_context()
                 if not context.ok():
-                    # Context is invalid, need to reinitialize
                     rclpy.init()
             except Exception:
-                # Any error checking context means we need to reinitialize
                 rclpy.init()
 
-        # Create unique node name
         node_name = generate_test_node_name(
             "sim_test",
-            self._isolation_config.domain_id
+            self._isolation_config.domain_id,
         )
 
-        # Create node with use_sim_time
         self._node = rclpy.create_node(
             node_name,
             parameter_overrides=[
                 Parameter('use_sim_time', Parameter.Type.BOOL, True)
-            ]
+            ],
         )
 
-        # Create executor
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self._node)
 
-        # Storage for message collectors
         self._collectors: Dict[str, MessageCollector] = {}
 
         self._node.get_logger().info(
-            f"Test initialized: {node_name} (domain: {self._isolation_config.domain_id})"
+            f"Test initialized: {node_name} "
+            f"(domain: {self._isolation_config.domain_id})"
         )
 
     def _teardown_test(self) -> None:
         """Clean up ROS 2 resources after test."""
-        # Destroy all collectors
         for collector in self._collectors.values():
             collector.destroy()
         self._collectors.clear()
 
-        # Remove node from executor
         if hasattr(self, '_executor') and hasattr(self, '_node'):
             self._executor.remove_node(self._node)
             self._node.destroy_node()
@@ -172,12 +280,13 @@ class SimTestFixture(RequirementValidator):
                 pass
             SimTestFixture._rclpy_initialized = False
 
+    # -----------------------------------------------------------------
+    # Spin helpers
+    # -----------------------------------------------------------------
+
     def spin_for_duration(self, duration_sec: float) -> None:
         """
         Spin the executor for a specified duration.
-
-        Processes callbacks for the given duration, allowing time for
-        messages to be received and simulation to progress.
 
         Args:
             duration_sec: How long to spin (seconds)
@@ -187,7 +296,7 @@ class SimTestFixture(RequirementValidator):
     def spin_until_condition(
         self,
         condition: Callable[[], bool],
-        timeout_sec: float
+        timeout_sec: float,
     ) -> bool:
         """
         Spin until a condition is met or timeout occurs.
@@ -201,18 +310,21 @@ class SimTestFixture(RequirementValidator):
         """
         return spin_until_condition(self._executor, condition, timeout_sec)
 
+    # -----------------------------------------------------------------
+    # Message collectors
+    # -----------------------------------------------------------------
+
     def create_message_collector(
         self,
         topic: str,
         msg_type: Type[MsgT],
         key: Optional[str] = None,
-        **kwargs: Any
-    ) -> MessageCollector[MsgT]:
+        **kwargs: Any,
+    ) -> 'MessageCollector[MsgT]':
         """
         Create a message collector for a topic.
 
-        The collector is stored internally and managed by the fixture.
-        It will be automatically destroyed during test teardown.
+        The collector is managed by the fixture and destroyed on teardown.
 
         Args:
             topic: Topic to subscribe to
@@ -221,7 +333,7 @@ class SimTestFixture(RequirementValidator):
             **kwargs: Additional arguments for MessageCollector
 
         Returns:
-            MessageCollector[MsgT]: A collector typed to the message type provided
+            MessageCollector typed to the message type provided
         """
         collector = MessageCollector(self._node, topic, msg_type, **kwargs)
         storage_key = key if key else topic
@@ -229,27 +341,18 @@ class SimTestFixture(RequirementValidator):
         return collector
 
     def get_collector(self, key: str) -> Optional[MessageCollector]:
-        """
-        Get a message collector by key.
-
-        Args:
-            key: Collector key (topic name or custom key)
-
-        Returns:
-            Message collector or None if not found
-        """
+        """Get a message collector by key."""
         return self._collectors.get(key)
 
     def clear_messages(self, key: str) -> None:
-        """
-        Clear messages from a collector.
-
-        Args:
-            key: Collector key
-        """
+        """Clear messages from a collector."""
         collector = self._collectors.get(key)
         if collector:
             collector.clear()
+
+    # -----------------------------------------------------------------
+    # Properties
+    # -----------------------------------------------------------------
 
     @property
     def node(self) -> Node:
@@ -270,16 +373,75 @@ class SimTestFixture(RequirementValidator):
         """Get the logger for this test."""
         return self._node.get_logger()
 
+    # -----------------------------------------------------------------
+    # Simulation convenience methods (no-ops when sim not configured)
+    # -----------------------------------------------------------------
 
-# Convenience fixture for standalone pytest usage
+    @property
+    def simulation_manager(self):
+        """Get the singleton SimulationManager (or None)."""
+        try:
+            from sim_harness.simulator.simulation_manager import (
+                get_simulation_manager,
+            )
+            return get_simulation_manager()
+        except ImportError:
+            return None
+
+    @property
+    def current_simulation(self):
+        """Get the current simulation configuration (or None)."""
+        mgr = self.simulation_manager
+        return mgr.current_config if mgr else None
+
+    def restart_simulation(self) -> bool:
+        """
+        Force restart the current simulation.
+
+        Returns:
+            True if restart succeeded, False if not configured
+        """
+        mgr = self.simulation_manager
+        if mgr is None:
+            return False
+        return mgr.restart(
+            startup_timeout=self.STARTUP_TIMEOUT,
+            gazebo_delay=self.GAZEBO_STARTUP_DELAY,
+        )
+
+    def wait_for_simulation(self, timeout_sec: float = 30.0) -> bool:
+        """
+        Wait for simulation to be ready.
+
+        Args:
+            timeout_sec: Maximum time to wait
+
+        Returns:
+            True if simulation is ready, False if timeout or not configured
+        """
+        try:
+            from sim_harness.simulator.gazebo_backend import GazeboBackend
+            return GazeboBackend().wait_until_ready(timeout_sec)
+        except ImportError:
+            return False
+
+
+# Backwards compatibility alias
+SimulationTestFixture = SimTestFixture
+
+
+# -----------------------------------------------------------------
+# Standalone pytest fixtures
+# -----------------------------------------------------------------
+
 @pytest.fixture
 def ros_node():
     """
     Pytest fixture providing a ROS 2 node.
 
-    Usage:
+    Usage::
+
         def test_something(ros_node):
-            # ros_node is a rclpy.node.Node instance
             pub = ros_node.create_publisher(String, '/topic', 10)
     """
     config = get_test_isolation_config()
@@ -294,11 +456,10 @@ def ros_node():
         node_name,
         parameter_overrides=[
             Parameter('use_sim_time', Parameter.Type.BOOL, True)
-        ]
+        ],
     )
 
     yield node
-
     node.destroy_node()
 
 
@@ -307,27 +468,13 @@ def ros_executor(ros_node):
     """
     Pytest fixture providing a ROS 2 executor with node already added.
 
-    The executor has ros_node added to it and will be cleaned up automatically.
+    Usage::
 
-    Usage:
         def test_something(ros_executor, ros_node):
-            from std_msgs.msg import String
-            from sim_harness.core.message_collector import MessageCollector
             from sim_harness.core.spin_helpers import spin_for_duration
-
-            collector = MessageCollector(ros_node, '/topic', String)
             spin_for_duration(ros_executor, 1.0)
-            assert collector.count() > 0
-
-    Args:
-        ros_node: The ros_node fixture (automatically injected by pytest)
-
-    Yields:
-        SingleThreadedExecutor with ros_node added
     """
     executor = SingleThreadedExecutor()
     executor.add_node(ros_node)
-
     yield executor
-
     executor.remove_node(ros_node)
