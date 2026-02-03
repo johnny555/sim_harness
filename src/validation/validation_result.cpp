@@ -172,10 +172,10 @@ void ValidationScope::addResult(const ValidationResult & result)
 {
   std::lock_guard<std::mutex> lock(mutex_);
   results_.push_back(result);
-  // Propagate to parent while holding our lock. This prevents race conditions
-  // when multiple threads add results to the same child scope simultaneously.
-  // Note: This creates a lock ordering constraint - parent locks must be
-  // acquired after child locks to avoid deadlock.
+  // Propagate to parent while holding child lock. This ensures thread-safe
+  // propagation when multiple threads add results to the same child simultaneously.
+  // Lock ordering: child locks are acquired before parent locks (recursively).
+  // All code using ValidationScope must follow this ordering to avoid deadlock.
   if (parent_) {
     parent_->addResult(result);
   }
