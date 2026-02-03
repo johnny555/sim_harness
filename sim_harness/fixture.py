@@ -114,6 +114,7 @@ class SimTestFixture:
             try:
                 rclpy.shutdown()
             except Exception:
+                # Ignore errors during shutdown - process is exiting anyway.
                 pass
             SimTestFixture._rclpy_initialized = False
 
@@ -169,6 +170,7 @@ class SimTestFixture:
             from sim_harness.simulator.simulation_manager import get_simulation_manager
             get_simulation_manager().release()
         except ImportError:
+            # Simulation manager not available - skip release.
             pass
 
     # -- Properties ---------------------------------------------------------
