@@ -167,6 +167,33 @@ from sim_harness.core.stream_properties import (
     negate,
 )
 
+# Hypothesis property-based testing (optional dependency)
+from sim_harness.core.sim_property import (
+    sim_property,
+    PropertyFailure,
+    check_recorded_property,
+    check_recorded_eventually,
+    check_recorded_monotonic,
+    hypothesis_check_recorded,
+)
+from sim_harness.core.strategies import (
+    point_strategy,
+    vector3_strategy,
+    quaternion_strategy,
+    yaw_quaternion_strategy,
+    pose_strategy,
+    twist_strategy,
+    twist_strategy_3d,
+    navigation_goal_2d,
+    waypoints_strategy,
+    duration_strategy,
+    rate_strategy,
+    threshold_strategy,
+    angle_strategy,
+    speed_strategy,
+    distance_strategy,
+)
+
 # Test runner (lazy import to avoid circular imports)
 def get_test_runner():
     """Get the TestRunner class for running launch tests."""
@@ -289,6 +316,29 @@ __all__ = [
     'all_of',
     'any_of',
     'negate',
+    # Hypothesis property-based testing
+    'sim_property',
+    'PropertyFailure',
+    'check_recorded_property',
+    'check_recorded_eventually',
+    'check_recorded_monotonic',
+    'hypothesis_check_recorded',
+    # Hypothesis strategies (ROS message generators)
+    'point_strategy',
+    'vector3_strategy',
+    'quaternion_strategy',
+    'yaw_quaternion_strategy',
+    'pose_strategy',
+    'twist_strategy',
+    'twist_strategy_3d',
+    'navigation_goal_2d',
+    'waypoints_strategy',
+    'duration_strategy',
+    'rate_strategy',
+    'threshold_strategy',
+    'angle_strategy',
+    'speed_strategy',
+    'distance_strategy',
     # Test runner
     'get_test_runner',
     'get_test_registry',

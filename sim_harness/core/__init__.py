@@ -49,6 +49,31 @@ from sim_harness.core.stream_properties import (
     any_of,
     negate,
 )
+from sim_harness.core.sim_property import (
+    sim_property,
+    PropertyFailure,
+    check_recorded_property,
+    check_recorded_eventually,
+    check_recorded_monotonic,
+    hypothesis_check_recorded,
+)
+from sim_harness.core.strategies import (
+    point_strategy,
+    vector3_strategy,
+    quaternion_strategy,
+    yaw_quaternion_strategy,
+    pose_strategy,
+    twist_strategy,
+    twist_strategy_3d,
+    navigation_goal_2d,
+    waypoints_strategy,
+    duration_strategy,
+    rate_strategy,
+    threshold_strategy,
+    angle_strategy,
+    speed_strategy,
+    distance_strategy,
+)
 
 __all__ = [
     'SimTestFixture',
@@ -88,4 +113,27 @@ __all__ = [
     'all_of',
     'any_of',
     'negate',
+    # Hypothesis property-based testing
+    'sim_property',
+    'PropertyFailure',
+    'check_recorded_property',
+    'check_recorded_eventually',
+    'check_recorded_monotonic',
+    'hypothesis_check_recorded',
+    # Hypothesis strategies (ROS message generators)
+    'point_strategy',
+    'vector3_strategy',
+    'quaternion_strategy',
+    'yaw_quaternion_strategy',
+    'pose_strategy',
+    'twist_strategy',
+    'twist_strategy_3d',
+    'navigation_goal_2d',
+    'waypoints_strategy',
+    'duration_strategy',
+    'rate_strategy',
+    'threshold_strategy',
+    'angle_strategy',
+    'speed_strategy',
+    'distance_strategy',
 ]
