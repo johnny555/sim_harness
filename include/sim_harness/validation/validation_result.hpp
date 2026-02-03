@@ -4,6 +4,7 @@
 #ifndef SIM_HARNESS__VALIDATION__VALIDATION_RESULT_HPP_
 #define SIM_HARNESS__VALIDATION__VALIDATION_RESULT_HPP_
 
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -62,85 +63,72 @@ struct ValidationResult
 };
 
 /**
- * @brief Singleton collector for validation results.
+ * @brief Scoped validation result collection.
  *
- * Accumulates validation results across all tests and provides
- * export functionality for traceability reports.
+ * Each test suite or session can create its own scope rather than relying
+ * on a process-global singleton. Scopes optionally propagate results to
+ * a parent scope for hierarchical collection.
+ *
+ * @code
+ * auto scope = std::make_shared<ValidationScope>("nav_tests");
+ * scope->addResult(ValidationResult::create("REQ-001", "Nav works", true));
+ * scope->exportToJson("results.json");
+ * @endcode
+ */
+class ValidationScope
+{
+public:
+  explicit ValidationScope(
+    const std::string & name,
+    std::shared_ptr<ValidationScope> parent = nullptr);
+
+  void addResult(const ValidationResult & result);
+  void clear();
+  std::vector<ValidationResult> getResults() const;
+  void getCounts(size_t & passed_out, size_t & failed_out) const;
+  bool exportToJson(const std::string & filepath) const;
+  void printSummary() const;
+
+  const std::string & name() const { return name_; }
+
+private:
+  std::string name_;
+  std::shared_ptr<ValidationScope> parent_;
+  mutable std::mutex mutex_;
+  std::vector<ValidationResult> results_;
+};
+
+/**
+ * @brief Backward-compatible singleton collector that delegates to
+ * a default ValidationScope.
+ *
+ * New code should prefer using ValidationScope directly. This class
+ * exists so that existing code calling instance() continues to work.
  */
 class ValidationResultCollector
 {
 public:
-  /**
-   * @brief Get the singleton instance.
-   *
-   * @return Reference to the global collector
-   */
   static ValidationResultCollector & instance();
 
-  /**
-   * @brief Add a validation result.
-   *
-   * Thread-safe.
-   *
-   * @param result The result to add
-   */
   void addResult(const ValidationResult & result);
-
-  /**
-   * @brief Clear all collected results.
-   *
-   * Thread-safe.
-   */
   void clear();
-
-  /**
-   * @brief Get all collected results.
-   *
-   * Thread-safe.
-   *
-   * @return Copy of all results
-   */
   std::vector<ValidationResult> getResults() const;
-
-  /**
-   * @brief Get count of passed/failed results.
-   *
-   * @param passed_out Output: number of passed validations
-   * @param failed_out Output: number of failed validations
-   */
   void getCounts(size_t & passed_out, size_t & failed_out) const;
-
-  /**
-   * @brief Export results to a JSON file.
-   *
-   * JSON format:
-   * @code
-   * {
-   *   "timestamp": "2024-01-15T10:30:00",
-   *   "summary": {"total": 10, "passed": 8, "failed": 2},
-   *   "results": [...]
-   * }
-   * @endcode
-   *
-   * @param filepath Path to write JSON file
-   * @return true if export succeeded
-   */
   bool exportToJson(const std::string & filepath) const;
-
-  /**
-   * @brief Print a summary to stdout.
-   *
-   * Includes pass/fail counts and list of failed requirements.
-   */
   void printSummary() const;
 
+  /// Get the underlying scope.
+  std::shared_ptr<ValidationScope> scope() const { return scope_; }
+
+  /// Replace the scope (e.g., per test suite).
+  void setScope(std::shared_ptr<ValidationScope> scope) { scope_ = scope; }
+
 private:
-  ValidationResultCollector() = default;
+  ValidationResultCollector();
   ValidationResultCollector(const ValidationResultCollector &) = delete;
   ValidationResultCollector & operator=(const ValidationResultCollector &) = delete;
 
-  mutable std::mutex mutex_;
-  std::vector<ValidationResult> results_;
+  std::shared_ptr<ValidationScope> scope_;
 };
 
 }  // namespace sim_harness

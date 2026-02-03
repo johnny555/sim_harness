@@ -85,101 +85,69 @@ class ValidationResult:
         )
 
 
-class ValidationResultCollector:
+class ValidationScope:
     """
-    Singleton collector for validation results.
+    Scoped validation result collection.
 
-    Accumulates validation results across all tests and provides
-    export functionality for traceability reports.
+    Each test suite or test session gets its own scope, replacing the need
+    for a process-global singleton. Scopes can optionally propagate results
+    to a parent scope for hierarchical collection.
+
+    Usage as a context manager::
+
+        with ValidationScope("turtlebot3_nav") as scope:
+            scope.add(ValidationResult.create("REQ-001", "Nav works", True))
+            scope.export_to_json("results.json")
+
+    Usage as a pytest fixture::
+
+        @pytest.fixture
+        def validation_scope(request):
+            scope = ValidationScope(request.node.name)
+            yield scope
     """
 
-    _instance: Optional['ValidationResultCollector'] = None
-    _lock = threading.Lock()
+    def __init__(self, name: str, parent: Optional['ValidationScope'] = None):
+        self.name = name
+        self.parent = parent
+        self._results: List[ValidationResult] = []
+        self._lock = threading.Lock()
 
-    def __new__(cls) -> 'ValidationResultCollector':
-        """Ensure singleton pattern."""
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._results: List[ValidationResult] = []
-                    cls._instance._results_lock = threading.Lock()
-        return cls._instance
-
-    @classmethod
-    def instance(cls) -> 'ValidationResultCollector':
-        """
-        Get the singleton instance.
-
-        Returns:
-            Reference to the global collector
-        """
-        return cls()
-
-    def add_result(self, result: ValidationResult) -> None:
-        """
-        Add a validation result.
-
-        Thread-safe.
-
-        Args:
-            result: The result to add
-        """
-        with self._results_lock:
+    def add(self, result: ValidationResult) -> None:
+        """Add a result. Thread-safe. Propagates to parent if present."""
+        with self._lock:
             self._results.append(result)
+        if self.parent is not None:
+            self.parent.add(result)
+
+    # Alias for backward compatibility with code that calls add_result()
+    add_result = add
 
     def clear(self) -> None:
-        """Clear all collected results. Thread-safe."""
-        with self._results_lock:
+        """Clear all results in this scope. Thread-safe."""
+        with self._lock:
             self._results.clear()
 
     def get_results(self) -> List[ValidationResult]:
-        """
-        Get all collected results.
-
-        Thread-safe.
-
-        Returns:
-            Copy of all results
-        """
-        with self._results_lock:
+        """Get a copy of all results. Thread-safe."""
+        with self._lock:
             return list(self._results)
 
     def get_counts(self) -> Tuple[int, int]:
-        """
-        Get count of passed/failed results.
-
-        Returns:
-            Tuple of (passed_count, failed_count)
-        """
-        with self._results_lock:
+        """Get (passed_count, failed_count). Thread-safe."""
+        with self._lock:
             passed = sum(1 for r in self._results if r.passed)
             failed = sum(1 for r in self._results if not r.passed)
             return passed, failed
 
     def export_to_json(self, filepath: str) -> bool:
-        """
-        Export results to a JSON file.
-
-        JSON format:
-            {
-                "timestamp": "2024-01-15T10:30:00",
-                "summary": {"total": 10, "passed": 8, "failed": 2},
-                "results": [...]
-            }
-
-        Args:
-            filepath: Path to write JSON file
-
-        Returns:
-            True if export succeeded
-        """
+        """Export results to a JSON file. Returns True on success."""
         try:
-            with self._results_lock:
-                # Calculate counts inline to avoid deadlock (don't call get_counts())
+            with self._lock:
                 passed = sum(1 for r in self._results if r.passed)
                 failed = sum(1 for r in self._results if not r.passed)
                 data = {
+                    "scope": self.name,
                     "timestamp": datetime.now().isoformat(),
                     "summary": {
                         "total": len(self._results),
@@ -198,13 +166,7 @@ class ValidationResultCollector:
             return False
 
     def print_summary(self) -> None:
-        """
-        Print a summary to stdout.
-
-        Includes pass/fail counts and list of failed requirements.
-        Uses ANSI color codes for visibility.
-        """
-        # ANSI color codes
+        """Print a summary to stdout with ANSI colors."""
         GREEN = '\033[92m'
         RED = '\033[91m'
         YELLOW = '\033[93m'
@@ -216,15 +178,14 @@ class ValidationResultCollector:
 
         print()
         print(f"{BOLD}{'=' * 60}{RESET}")
-        print(f"{BOLD}VALIDATION RESULTS SUMMARY{RESET}")
+        print(f"{BOLD}VALIDATION RESULTS SUMMARY ({self.name}){RESET}")
         print(f"{'=' * 60}")
         print(f"Total: {total}")
         print(f"{GREEN}Passed: {passed}{RESET}")
         print(f"{RED}Failed: {failed}{RESET}")
         print()
 
-        # List failed requirements
-        with self._results_lock:
+        with self._lock:
             failed_results = [r for r in self._results if not r.passed]
 
         if failed_results:
@@ -236,3 +197,79 @@ class ValidationResultCollector:
             print()
 
         print(f"{'=' * 60}")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        pass
+
+
+class ValidationResultCollector:
+    """
+    Backward-compatible collector that delegates to a thread-local
+    ValidationScope.
+
+    New code should prefer using ``ValidationScope`` directly. This class
+    exists so that existing code calling ``ValidationResultCollector.instance()``
+    continues to work, but results are now scoped per-thread by default
+    rather than being truly process-global.
+
+    To set a custom scope for the current thread::
+
+        scope = ValidationScope("my_suite")
+        ValidationResultCollector.set_scope(scope)
+    """
+
+    _thread_local = threading.local()
+    _lock = threading.Lock()
+
+    @classmethod
+    def set_scope(cls, scope: ValidationScope) -> None:
+        """Set the ValidationScope for the current thread."""
+        cls._thread_local.scope = scope
+
+    @classmethod
+    def _get_scope(cls) -> ValidationScope:
+        """Get or create the scope for the current thread."""
+        if not hasattr(cls._thread_local, 'scope'):
+            cls._thread_local.scope = ValidationScope("default")
+        return cls._thread_local.scope
+
+    @classmethod
+    def instance(cls) -> 'ValidationResultCollector':
+        """
+        Get the collector instance (backward-compatible API).
+
+        Returns a collector that delegates to the current thread's scope.
+        """
+        # Return a singleton wrapper that delegates to the thread-local scope
+        if not hasattr(cls, '_wrapper'):
+            with cls._lock:
+                if not hasattr(cls, '_wrapper'):
+                    cls._wrapper = cls.__new__(cls)
+        return cls._wrapper
+
+    def add_result(self, result: ValidationResult) -> None:
+        """Add a validation result to the current thread's scope."""
+        self._get_scope().add(result)
+
+    def clear(self) -> None:
+        """Clear results in the current thread's scope."""
+        self._get_scope().clear()
+
+    def get_results(self) -> List[ValidationResult]:
+        """Get results from the current thread's scope."""
+        return self._get_scope().get_results()
+
+    def get_counts(self) -> Tuple[int, int]:
+        """Get (passed, failed) counts from the current thread's scope."""
+        return self._get_scope().get_counts()
+
+    def export_to_json(self, filepath: str) -> bool:
+        """Export results from the current thread's scope to JSON."""
+        return self._get_scope().export_to_json(filepath)
+
+    def print_summary(self) -> None:
+        """Print summary of the current thread's scope."""
+        self._get_scope().print_summary()

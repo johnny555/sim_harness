@@ -113,7 +113,7 @@ protected:
    *
    * @tparam MsgT The message type
    * @param key The collector key (topic name or custom key)
-   * @return Vector of collected messages
+   * @return Vector of collected messages, or empty if key not found or type mismatch
    */
   template<typename MsgT>
   std::vector<MsgT> getMessages(const std::string & key)
@@ -122,12 +122,18 @@ protected:
     if (it == collectors_.end()) {
       return {};
     }
-    auto collector = std::dynamic_pointer_cast<MessageCollector<MsgT>>(
-      std::any_cast<std::shared_ptr<MessageCollector<MsgT>>>(it->second));
-    if (!collector) {
+    // any_cast throws std::bad_any_cast on type mismatch — catch it
+    // instead of relying on the redundant dynamic_pointer_cast that was here before.
+    try {
+      auto collector =
+        std::any_cast<std::shared_ptr<MessageCollector<MsgT>>>(it->second);
+      if (!collector) {
+        return {};
+      }
+      return collector->getMessages();
+    } catch (const std::bad_any_cast &) {
       return {};
     }
-    return collector->getMessages();
   }
 
   /**

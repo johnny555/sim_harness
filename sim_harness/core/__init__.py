@@ -29,6 +29,26 @@ from sim_harness.core.readiness_check import (
     CheckCategory,
     create_standard_check,
 )
+from sim_harness.core.topic_observer import (
+    TopicObserver,
+    ObservationResult,
+    ParallelObserver,
+    SENSOR_QOS,
+    collect_messages,
+    count_messages,
+    latest_message,
+    track_max,
+    track_timestamps,
+)
+from sim_harness.core.stream_properties import (
+    PropertyResult,
+    for_all_messages,
+    eventually,
+    monotonic,
+    all_of,
+    any_of,
+    negate,
+)
 
 __all__ = [
     'SimTestFixture',
@@ -50,4 +70,22 @@ __all__ = [
     'CheckStatus',
     'CheckCategory',
     'create_standard_check',
+    # TopicObserver (FP fold combinator)
+    'TopicObserver',
+    'ObservationResult',
+    'ParallelObserver',
+    'SENSOR_QOS',
+    'collect_messages',
+    'count_messages',
+    'latest_message',
+    'track_max',
+    'track_timestamps',
+    # Stream properties (Hedgehog-inspired)
+    'PropertyResult',
+    'for_all_messages',
+    'eventually',
+    'monotonic',
+    'all_of',
+    'any_of',
+    'negate',
 ]

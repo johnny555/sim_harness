@@ -62,6 +62,7 @@ from sim_harness.simulator.simulation_launcher import (
 from sim_harness.validation.validation_result import (
     ValidationResult,
     ValidationResultCollector,
+    ValidationScope,
 )
 from sim_harness.validation.requirement_validator import RequirementValidator
 
@@ -144,6 +145,28 @@ from sim_harness.core.readiness_check import (
     create_standard_check,
 )
 
+# FP-inspired combinators (TopicObserver, stream properties, predicates)
+from sim_harness.core.topic_observer import (
+    TopicObserver,
+    ObservationResult,
+    ParallelObserver,
+    SENSOR_QOS,
+    collect_messages,
+    count_messages,
+    latest_message,
+    track_max,
+    track_timestamps,
+)
+from sim_harness.core.stream_properties import (
+    PropertyResult,
+    for_all_messages,
+    eventually,
+    monotonic,
+    all_of,
+    any_of,
+    negate,
+)
+
 # Test runner (lazy import to avoid circular imports)
 def get_test_runner():
     """Get the TestRunner class for running launch tests."""
@@ -183,6 +206,7 @@ __all__ = [
     # Validation
     'ValidationResult',
     'ValidationResultCollector',
+    'ValidationScope',
     'RequirementValidator',
     # Sensor assertions
     'SensorDataResult',
@@ -247,6 +271,24 @@ __all__ = [
     'CheckStatus',
     'CheckCategory',
     'create_standard_check',
+    # TopicObserver (FP fold combinator)
+    'TopicObserver',
+    'ObservationResult',
+    'ParallelObserver',
+    'SENSOR_QOS',
+    'collect_messages',
+    'count_messages',
+    'latest_message',
+    'track_max',
+    'track_timestamps',
+    # Stream properties (Hedgehog-inspired)
+    'PropertyResult',
+    'for_all_messages',
+    'eventually',
+    'monotonic',
+    'all_of',
+    'any_of',
+    'negate',
     # Test runner
     'get_test_runner',
     'get_test_registry',
