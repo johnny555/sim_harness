@@ -195,7 +195,8 @@ class SimulationManager:
                 self._stop_internal()
 
             # Apply test isolation (unique ROS_DOMAIN_ID)
-            self._isolation_domain_id = random.randint(1, 230)
+            # Use 100-199 range to avoid conflicts with production systems
+            self._isolation_domain_id = random.randint(100, 199)
             os.environ['ROS_DOMAIN_ID'] = str(self._isolation_domain_id)
 
             # Check if a functional simulation is already running externally
