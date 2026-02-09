@@ -3,7 +3,7 @@ sim_harness
 
 A ROS 2 simulation testing framework for robotics applications.
 
-**Quick to Set Up** - **pytest Integration** - **Simulation Control** - **Requirement Tracing**
+**Quick to Set Up** - **pytest Integration** - **Simulation Control** - **Requirements Tracking**
 
 What is sim_harness?
 --------------------
@@ -15,9 +15,8 @@ that run in simulation. It provides:
 - **Test Fixtures** - Base classes that handle ROS 2 node lifecycle
 - **Message Collectors** - Easy subscription and message buffering
 - **Simulation Control** - Automatic Gazebo lifecycle management
-- **Assertion Primitives** - Pre-built checks for sensors, navigation, and more
-- **Readiness Checks** - Configurable startup validation for real or simulated robots
-- **Requirement Validation** - Map tests to requirements for traceability
+- **Assertion Library** - Pre-built checks for sensors, timing, motion, navigation, and perception
+- **Requirements Tracking** - Opt-in requirement-to-test mapping for compliance reporting
 
 Quick Example
 -------------
@@ -59,7 +58,7 @@ Automatic Simulation Lifecycle
 
 .. code-block:: python
 
-   class TestWithSim(SimulationTestFixture):
+   class TestWithSim(SimTestFixture):
        LAUNCH_PACKAGE = 'my_robot_gazebo'
        LAUNCH_FILE = 'simulation.launch.py'
 
@@ -72,31 +71,50 @@ Built-in Assertions
 
 .. code-block:: python
 
-   from sim_harness import assert_topic_published, assert_vehicle_moved
+   from sim_harness import assert_lidar_valid, assert_vehicle_moved
 
-   # Check a topic is publishing
-   result = assert_topic_published(node, "/scan", LaserScan, timeout=5.0)
-   assert result.success
+   # Validate LIDAR data quality
+   result = assert_lidar_valid(node, "/scan")
+   assert result.valid, result.details
 
    # Check robot moved
-   result = assert_vehicle_moved(node, "robot_01", min_distance=1.0)
-   assert result.success
+   result = assert_vehicle_moved(node, min_distance=1.0)
+   assert result.success, result.details
 
-Requirement Tracing
-~~~~~~~~~~~~~~~~~~~
+Nav2 and Perception Extensions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Specialized assertions live in dedicated extension modules:
 
 .. code-block:: python
 
-   def test_lidar_operational(self):
-       # ... test code ...
+   from sim_harness.nav2 import assert_nav2_active, assert_reaches_goal
+   from sim_harness.perception import assert_object_detected
 
-       self.assert_requirement(
-           "REQ-SEN-001",
-           "LIDAR sensor publishes valid data",
-           passed=True,
-           details="Received 100 messages",
-           category="Sensors"
-       )
+   # Check all Nav2 nodes are active
+   results = assert_nav2_active(node, timeout_sec=60.0)
+   assert all(r.success for r in results)
+
+Requirements Tracking (opt-in)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add requirement tracing by mixing in ``RequirementValidator``:
+
+.. code-block:: python
+
+   from sim_harness import SimTestFixture, RequirementValidator
+
+   class TestWithReqs(SimTestFixture, RequirementValidator):
+       def test_lidar_operational(self):
+           # ... test code ...
+
+           self.assert_requirement(
+               "REQ-SEN-001",
+               "LIDAR sensor publishes valid data",
+               passed=True,
+               details="Received 100 messages",
+               category="Sensors"
+           )
 
 Installation
 ------------
@@ -137,7 +155,6 @@ sim_harness is released under the Apache 2.0 License.
    guide/message_collection
    guide/simulation_control
    guide/assertions
-   guide/readiness_check
    guide/requirements
 
 .. toctree::

@@ -41,13 +41,104 @@ std::string escapeJson(const std::string & s)
   return ss.str();
 }
 
-// ANSI color codes
-constexpr const char * GREEN = "\033[92m";
-constexpr const char * RED = "\033[91m";
-constexpr const char * BOLD = "\033[1m";
-constexpr const char * RESET = "\033[0m";
+void writeResultsJson(
+  std::ostream & out,
+  const std::string & scope_name,
+  const std::vector<ValidationResult> & results)
+{
+  size_t passed = 0, failed = 0;
+  for (const auto & r : results) {
+    if (r.passed) {
+      ++passed;
+    } else {
+      ++failed;
+    }
+  }
+
+  out << "{\n";
+  if (!scope_name.empty()) {
+    out << "  \"scope\": \"" << escapeJson(scope_name) << "\",\n";
+  }
+  out << "  \"timestamp\": \"" << getCurrentTimestamp() << "\",\n";
+  out << "  \"summary\": {\n";
+  out << "    \"total\": " << results.size() << ",\n";
+  out << "    \"passed\": " << passed << ",\n";
+  out << "    \"failed\": " << failed << "\n";
+  out << "  },\n";
+  out << "  \"results\": [\n";
+
+  for (size_t i = 0; i < results.size(); ++i) {
+    const auto & r = results[i];
+    out << "    {\n";
+    out << "      \"requirement_id\": \"" << escapeJson(r.requirement_id) << "\",\n";
+    out << "      \"description\": \"" << escapeJson(r.description) << "\",\n";
+    out << "      \"passed\": " << (r.passed ? "true" : "false") << ",\n";
+    out << "      \"details\": \"" << escapeJson(r.details) << "\",\n";
+    out << "      \"timestamp\": \"" << escapeJson(r.timestamp) << "\",\n";
+    out << "      \"test_file\": \"" << escapeJson(r.test_file) << "\",\n";
+    out << "      \"test_method\": \"" << escapeJson(r.test_method) << "\",\n";
+    out << "      \"category\": \"" << escapeJson(r.category) << "\"\n";
+    out << "    }";
+    if (i < results.size() - 1) {
+      out << ",";
+    }
+    out << "\n";
+  }
+
+  out << "  ]\n";
+  out << "}\n";
+}
+
+void printSummaryImpl(
+  const std::string & label,
+  const std::vector<ValidationResult> & results)
+{
+  constexpr const char * GREEN = "\033[92m";
+  constexpr const char * RED = "\033[91m";
+  constexpr const char * BOLD = "\033[1m";
+  constexpr const char * RESET = "\033[0m";
+
+  size_t passed = 0, failed = 0;
+  std::vector<const ValidationResult *> failed_results;
+
+  for (const auto & r : results) {
+    if (r.passed) {
+      ++passed;
+    } else {
+      ++failed;
+      failed_results.push_back(&r);
+    }
+  }
+
+  std::cout << "\n";
+  std::cout << BOLD << "=== Validation Summary";
+  if (!label.empty()) {
+    std::cout << " (" << label << ")";
+  }
+  std::cout << " ===" << RESET << "\n";
+  std::cout << "Total: " << results.size() << "\n";
+  std::cout << GREEN << "Passed: " << passed << RESET << "\n";
+  std::cout << RED << "Failed: " << failed << RESET << "\n";
+
+  if (!failed_results.empty()) {
+    std::cout << "\n" << BOLD << "Failed Requirements:" << RESET << "\n";
+    for (const auto * r : failed_results) {
+      std::cout << RED << "  [FAIL] " << RESET
+                << r->requirement_id << ": " << r->description << "\n";
+      if (!r->details.empty()) {
+        std::cout << "         Details: " << r->details << "\n";
+      }
+    }
+  }
+
+  std::cout << "\n";
+}
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// ValidationResult
+// ---------------------------------------------------------------------------
 
 ValidationResult ValidationResult::create(
   const std::string & req_id,
@@ -66,31 +157,41 @@ ValidationResult ValidationResult::create(
   return result;
 }
 
-ValidationResultCollector & ValidationResultCollector::instance()
+// ---------------------------------------------------------------------------
+// ValidationScope
+// ---------------------------------------------------------------------------
+
+ValidationScope::ValidationScope(
+  const std::string & name,
+  std::shared_ptr<ValidationScope> parent)
+: name_(name), parent_(parent)
 {
-  static ValidationResultCollector instance;
-  return instance;
 }
 
-void ValidationResultCollector::addResult(const ValidationResult & result)
+void ValidationScope::addResult(const ValidationResult & result)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
-  results_.push_back(result);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    results_.push_back(result);
+  }
+  if (parent_) {
+    parent_->addResult(result);
+  }
 }
 
-void ValidationResultCollector::clear()
+void ValidationScope::clear()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   results_.clear();
 }
 
-std::vector<ValidationResult> ValidationResultCollector::getResults() const
+std::vector<ValidationResult> ValidationScope::getResults() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
   return results_;
 }
 
-void ValidationResultCollector::getCounts(size_t & passed_out, size_t & failed_out) const
+void ValidationScope::getCounts(size_t & passed_out, size_t & failed_out) const
 {
   std::lock_guard<std::mutex> lock(mutex_);
   passed_out = 0;
@@ -104,7 +205,7 @@ void ValidationResultCollector::getCounts(size_t & passed_out, size_t & failed_o
   }
 }
 
-bool ValidationResultCollector::exportToJson(const std::string & filepath) const
+bool ValidationScope::exportToJson(const std::string & filepath) const
 {
   std::lock_guard<std::mutex> lock(mutex_);
 
@@ -113,82 +214,59 @@ bool ValidationResultCollector::exportToJson(const std::string & filepath) const
     return false;
   }
 
-  size_t passed = 0, failed = 0;
-  for (const auto & r : results_) {
-    if (r.passed) {
-      ++passed;
-    } else {
-      ++failed;
-    }
-  }
-
-  file << "{\n";
-  file << "  \"timestamp\": \"" << getCurrentTimestamp() << "\",\n";
-  file << "  \"summary\": {\n";
-  file << "    \"total\": " << results_.size() << ",\n";
-  file << "    \"passed\": " << passed << ",\n";
-  file << "    \"failed\": " << failed << "\n";
-  file << "  },\n";
-  file << "  \"results\": [\n";
-
-  for (size_t i = 0; i < results_.size(); ++i) {
-    const auto & r = results_[i];
-    file << "    {\n";
-    file << "      \"requirement_id\": \"" << escapeJson(r.requirement_id) << "\",\n";
-    file << "      \"description\": \"" << escapeJson(r.description) << "\",\n";
-    file << "      \"passed\": " << (r.passed ? "true" : "false") << ",\n";
-    file << "      \"details\": \"" << escapeJson(r.details) << "\",\n";
-    file << "      \"timestamp\": \"" << escapeJson(r.timestamp) << "\",\n";
-    file << "      \"test_file\": \"" << escapeJson(r.test_file) << "\",\n";
-    file << "      \"test_method\": \"" << escapeJson(r.test_method) << "\",\n";
-    file << "      \"category\": \"" << escapeJson(r.category) << "\"\n";
-    file << "    }";
-    if (i < results_.size() - 1) {
-      file << ",";
-    }
-    file << "\n";
-  }
-
-  file << "  ]\n";
-  file << "}\n";
-
+  writeResultsJson(file, name_, results_);
   return true;
+}
+
+void ValidationScope::printSummary() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  printSummaryImpl(name_, results_);
+}
+
+// ---------------------------------------------------------------------------
+// ValidationResultCollector (backward-compatible delegate)
+// ---------------------------------------------------------------------------
+
+ValidationResultCollector::ValidationResultCollector()
+: scope_(std::make_shared<ValidationScope>("default"))
+{
+}
+
+ValidationResultCollector & ValidationResultCollector::instance()
+{
+  static ValidationResultCollector instance;
+  return instance;
+}
+
+void ValidationResultCollector::addResult(const ValidationResult & result)
+{
+  scope_->addResult(result);
+}
+
+void ValidationResultCollector::clear()
+{
+  scope_->clear();
+}
+
+std::vector<ValidationResult> ValidationResultCollector::getResults() const
+{
+  return scope_->getResults();
+}
+
+void ValidationResultCollector::getCounts(size_t & passed_out, size_t & failed_out) const
+{
+  scope_->getCounts(passed_out, failed_out);
+}
+
+bool ValidationResultCollector::exportToJson(const std::string & filepath) const
+{
+  return scope_->exportToJson(filepath);
 }
 
 void ValidationResultCollector::printSummary() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
-
-  size_t passed = 0, failed = 0;
-  std::vector<const ValidationResult *> failed_results;
-
-  for (const auto & r : results_) {
-    if (r.passed) {
-      ++passed;
-    } else {
-      ++failed;
-      failed_results.push_back(&r);
-    }
-  }
-
-  std::cout << "\n";
-  std::cout << BOLD << "=== Validation Summary ===" << RESET << "\n";
-  std::cout << "Total: " << results_.size() << "\n";
-  std::cout << GREEN << "Passed: " << passed << RESET << "\n";
-  std::cout << RED << "Failed: " << failed << RESET << "\n";
-
-  if (!failed_results.empty()) {
-    std::cout << "\n" << BOLD << "Failed Requirements:" << RESET << "\n";
-    for (const auto * r : failed_results) {
-      std::cout << RED << "  [FAIL] " << RESET
-                << r->requirement_id << ": " << r->description << "\n";
-      if (!r->details.empty()) {
-        std::cout << "         Details: " << r->details << "\n";
-      }
-    }
-  }
-
-  std::cout << "\n";
+  scope_->printSummary();
 }
 
 }  // namespace sim_harness

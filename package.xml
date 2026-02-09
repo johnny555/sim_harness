@@ -54,6 +54,7 @@
   <!-- Python Testing -->
   <test_depend>python3-pytest</test_depend>
   <test_depend>python3-pytest-cov</test_depend>
+  <test_depend>python3-hypothesis</test_depend>
 
   <!-- Linting (optional) -->
   <test_depend>ament_lint_auto</test_depend>

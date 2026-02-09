@@ -31,12 +31,13 @@ from tf2_msgs.msg import TFMessage
 
 from sim_harness import (
     SimTestFixture,
+    RequirementValidator,
     ValidationResultCollector,
-    assert_lifecycle_node_active,
 )
+from sim_harness.nav2 import assert_lifecycle_node_active
 
 
-class TestTurtleBot3Integration(SimTestFixture):
+class TestTurtleBot3Integration(SimTestFixture, RequirementValidator):
     """Integration test fixture for TurtleBot3 simulation."""
 
     # Topic configuration
