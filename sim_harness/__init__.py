@@ -116,28 +116,6 @@ from sim_harness.checks import (  # noqa: F401
     check_vehicle_velocity,
     check_vehicle_in_region,
     check_vehicle_orientation,
-    # assert_* (deprecated aliases)
-    assert_service_available,
-    assert_action_server_available,
-    assert_node_running,
-    assert_nodes_running,
-    assert_parameter_exists,
-    assert_sensor_publishing,
-    assert_lidar_valid,
-    assert_gps_valid,
-    assert_imu_valid,
-    assert_camera_valid,
-    assert_joint_states_valid,
-    assert_publish_rate,
-    assert_latency,
-    assert_transform_available,
-    assert_action_server_responsive,
-    assert_vehicle_moved,
-    assert_vehicle_moved_with_ground_truth,
-    assert_vehicle_stationary,
-    assert_vehicle_velocity,
-    assert_vehicle_in_region,
-    assert_vehicle_orientation,
 )
 
 __all__ = [

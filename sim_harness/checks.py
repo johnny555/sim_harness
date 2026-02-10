@@ -746,28 +746,3 @@ def check_vehicle_moved_with_ground_truth(
     except ImportError:
         result.details += "; ground truth unavailable (gazebo_ground_truth not installed)"
     return result
-
-
-# -- Backward compatibility aliases (deprecated) ───────────────────────────
-
-assert_service_available = check_service_available
-assert_action_server_available = check_action_server_available
-assert_node_running = check_node_running
-assert_nodes_running = check_nodes_running
-assert_parameter_exists = check_parameter_exists
-assert_sensor_publishing = check_sensor_publishing
-assert_lidar_valid = check_lidar_valid
-assert_gps_valid = check_gps_valid
-assert_imu_valid = check_imu_valid
-assert_camera_valid = check_camera_valid
-assert_joint_states_valid = check_joint_states_valid
-assert_publish_rate = check_publish_rate
-assert_latency = check_latency
-assert_transform_available = check_transform_available
-assert_action_server_responsive = check_action_server_responsive
-assert_vehicle_moved = check_vehicle_moved
-assert_vehicle_stationary = check_vehicle_stationary
-assert_vehicle_velocity = check_vehicle_velocity
-assert_vehicle_in_region = check_vehicle_in_region
-assert_vehicle_orientation = check_vehicle_orientation
-assert_vehicle_moved_with_ground_truth = check_vehicle_moved_with_ground_truth
