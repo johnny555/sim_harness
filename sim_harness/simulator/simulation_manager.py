@@ -119,7 +119,6 @@ _RESTART_TRIGGERING_ARGS: Set[str] = {
     "model",
     "vehicle",
     "headless",
-    "gui",
 }
 
 

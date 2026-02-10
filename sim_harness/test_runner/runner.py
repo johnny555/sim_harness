@@ -69,7 +69,8 @@ class TestRunner:
                  verbose: bool = False,
                  timeout: int = 300,
                  domain_id: Optional[int] = None,
-                 output_dir: Optional[Path] = None):
+                 output_dir: Optional[Path] = None,
+                 launch_args: Optional[Dict[str, str]] = None):
         """Initialize the test runner.
 
         Args:
@@ -78,6 +79,8 @@ class TestRunner:
             timeout: Default timeout in seconds.
             domain_id: Specific ROS_DOMAIN_ID to use, or None for auto.
             output_dir: Directory for test results (XML, logs).
+            launch_args: Launch arguments passed to launch test files
+                (e.g. ``{'headless': 'true'}``).
         """
         self.registry = TestRegistry(workspace_root)
         self.workspace_root = self.registry.workspace_root
@@ -85,6 +88,7 @@ class TestRunner:
         self.default_timeout = timeout
         self.fixed_domain_id = domain_id
         self.output_dir = output_dir or Path('/tmp/launch_test_results')
+        self.launch_args: Dict[str, str] = launch_args or {}
         self.results: List[TestResult] = []
 
     def _get_domain_id(self) -> int:
@@ -138,7 +142,9 @@ class TestRunner:
 
         # Build command using executor
         result_file = self.output_dir / executor.get_output_filename(test)
-        cmd = executor.build_command(test, result_file)
+        cmd = executor.build_command(
+            test, result_file, launch_args=self.launch_args,
+        )
 
         # Add extra args
         if extra_args:

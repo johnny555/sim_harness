@@ -92,6 +92,18 @@ class RunVerb(VerbExtension):
             action='store_true',
             help='Skip Gazebo cleanup before/after tests'
         )
+        headless_group = parser.add_mutually_exclusive_group()
+        headless_group.add_argument(
+            '--headless',
+            action='store_true',
+            default=True,
+            help='Run Gazebo in headless mode (default)'
+        )
+        headless_group.add_argument(
+            '--gui',
+            action='store_true',
+            help='Run Gazebo with GUI'
+        )
         parser.add_argument(
             '-l', '--list-only',
             action='store_true',
@@ -137,12 +149,14 @@ class RunVerb(VerbExtension):
             kill_all_gazebo()
 
         # Create runner
+        headless = not args.gui
         runner = TestRunner(
             workspace_root=args.workspace,
             verbose=args.verbose,
             timeout=args.timeout,
             domain_id=args.domain_id,
             output_dir=args.output_dir,
+            launch_args={'headless': str(headless).lower()},
         )
 
         # Get tests to run

@@ -12,7 +12,7 @@ import subprocess
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from sim_harness.test_runner.test_registry import TestInfo, TestType
 
@@ -21,12 +21,18 @@ class TestExecutor(ABC):
     """Abstract base class for test execution strategies."""
 
     @abstractmethod
-    def build_command(self, test: TestInfo, output_file: Path) -> List[str]:
+    def build_command(
+        self,
+        test: TestInfo,
+        output_file: Path,
+        launch_args: Optional[Dict[str, str]] = None,
+    ) -> List[str]:
         """Build command line for test execution.
 
         Args:
             test: TestInfo for the test to run.
             output_file: Path for JUnit XML output.
+            launch_args: Launch arguments to forward (key=value pairs).
 
         Returns:
             List of command-line arguments.
@@ -60,21 +66,31 @@ class TestExecutor(ABC):
 class LaunchTestExecutor(TestExecutor):
     """Executor for launch_testing Python tests."""
 
-    def build_command(self, test: TestInfo, output_file: Path) -> List[str]:
+    def build_command(
+        self,
+        test: TestInfo,
+        output_file: Path,
+        launch_args: Optional[Dict[str, str]] = None,
+    ) -> List[str]:
         """Build launch_testing command.
 
         Args:
             test: TestInfo for the test to run.
             output_file: Path for JUnit XML output.
+            launch_args: Launch arguments forwarded as ``key:=value``.
 
         Returns:
             List of command-line arguments.
         """
-        return [
+        cmd = [
             sys.executable, '-m', 'launch_testing.launch_test',
             str(test.path),
             '--junit-xml', str(output_file),
         ]
+        if launch_args:
+            for key, value in launch_args.items():
+                cmd.append(f'{key}:={value}')
+        return cmd
 
     def get_output_filename(self, test: TestInfo) -> str:
         """Get output filename for launch test results."""
@@ -84,12 +100,18 @@ class LaunchTestExecutor(TestExecutor):
 class GTestExecutor(TestExecutor):
     """Executor for GTest/rtest C++ tests."""
 
-    def build_command(self, test: TestInfo, output_file: Path) -> List[str]:
+    def build_command(
+        self,
+        test: TestInfo,
+        output_file: Path,
+        launch_args: Optional[Dict[str, str]] = None,
+    ) -> List[str]:
         """Build GTest command.
 
         Args:
             test: TestInfo for the test to run.
             output_file: Path for JUnit XML output.
+            launch_args: Unused for GTest.
 
         Returns:
             List of command-line arguments.
@@ -118,12 +140,18 @@ class GTestExecutor(TestExecutor):
 class PytestExecutor(TestExecutor):
     """Executor for pytest Python tests (future use)."""
 
-    def build_command(self, test: TestInfo, output_file: Path) -> List[str]:
+    def build_command(
+        self,
+        test: TestInfo,
+        output_file: Path,
+        launch_args: Optional[Dict[str, str]] = None,
+    ) -> List[str]:
         """Build pytest command.
 
         Args:
             test: TestInfo for the test to run.
             output_file: Path for JUnit XML output.
+            launch_args: Unused for pytest.
 
         Returns:
             List of command-line arguments.
