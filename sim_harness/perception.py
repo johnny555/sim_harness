@@ -2,18 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Perception extensions — object detection and region checks.
+Perception extensions -- object detection and region checks.
+
+Primary API uses ``check_*`` names; ``assert_*`` aliases are provided for
+backward compatibility.
 
 Example::
 
     from sim_harness import SimTestFixture
-    from sim_harness.perception import assert_object_detected, assert_region_clear
+    from sim_harness.perception import check_object_detected, check_region_clear
 
     class TestPerception(SimTestFixture):
         def test_detects_obstacle(self):
-            result = assert_object_detected(
+            result = check_object_detected(
                 self.node, '/detections', expected_position)
-            assert result.detected, result.details
+            assert result.ok, result.details
 """
 
 import math
@@ -34,30 +37,53 @@ class DetectionResult:
     closest_position: Optional[Point] = None
     details: str = ""
 
+    @property
+    def ok(self) -> bool:
+        return self.detected
+
 
 def _dist3(p1: Point, p2: Point) -> float:
     return math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2 + (p1.z - p2.z) ** 2)
 
 
 @contextmanager
-def _managed_executor(node: Node):
-    executor = rclpy.executors.SingleThreadedExecutor()
-    executor.add_node(node)
+def _managed_executor(node: Node, executor=None):
+    """Yield an executor that can process callbacks for *node*.
+
+    When *executor* is provided, assumes it is already spinning in the
+    background and yields it directly.  When None, tries to create a
+    managed SingleThreadedExecutor.  If the node is already in another
+    executor (fixture scenario), yields None and the caller should use
+    sleep-based waiting.
+    """
+    if executor is not None:
+        yield executor, False
+        return
+
+    exc = rclpy.executors.SingleThreadedExecutor()
     try:
-        yield executor
+        exc.add_node(node)
+    except RuntimeError:
+        # Node already in an executor — sleep-based waiting
+        yield None, False
+        return
+
+    try:
+        yield exc, True
     finally:
-        executor.remove_node(node)
+        exc.remove_node(node)
 
 
-# ── Assertions ────────────────────────────────────────────────────────────
+# -- Check functions ──────────────────────────────────────────────────────
 
 
-def assert_object_detected(
+def check_object_detected(
     node: Node, detection_topic: str, expected_position: Point,
     search_radius: float = 1.0, timeout_sec: float = 10.0,
     position_extractor: Optional[Callable[[Any], List[Point]]] = None,
+    executor=None,
 ) -> DetectionResult:
-    """Assert that an object is detected near an expected position."""
+    """Check that an object is detected near an expected position."""
     result = DetectionResult()
     positions: List[Point] = []
 
@@ -71,11 +97,14 @@ def assert_object_detected(
         result.details = f"Failed to subscribe to {detection_topic}: {e}"
         return result
 
-    with _managed_executor(node) as executor:
+    with _managed_executor(node, executor) as (exc, managed):
         try:
             t0 = time.monotonic()
             while time.monotonic() - t0 < timeout_sec:
-                executor.spin_once(timeout_sec=0.1)
+                if managed:
+                    exc.spin_once(timeout_sec=0.1)
+                else:
+                    time.sleep(0.1)
                 for pos in positions:
                     d = _dist3(pos, expected_position)
                     if d <= search_radius:
@@ -97,12 +126,13 @@ def assert_object_detected(
     return result
 
 
-def assert_object_detected_by_class(
+def check_object_detected_by_class(
     node: Node, detection_topic: str, object_class: str,
     min_confidence: float = 0.5, timeout_sec: float = 10.0,
     class_extractor: Optional[Callable[[Any], List[tuple]]] = None,
+    executor=None,
 ) -> DetectionResult:
-    """Assert that an object of a specific class is detected."""
+    """Check that an object of a specific class is detected."""
     result = DetectionResult()
     detections: List[tuple] = []
 
@@ -116,11 +146,14 @@ def assert_object_detected_by_class(
         result.details = f"Failed to subscribe to {detection_topic}: {e}"
         return result
 
-    with _managed_executor(node) as executor:
+    with _managed_executor(node, executor) as (exc, managed):
         try:
             t0 = time.monotonic()
             while time.monotonic() - t0 < timeout_sec:
-                executor.spin_once(timeout_sec=0.1)
+                if managed:
+                    exc.spin_once(timeout_sec=0.1)
+                else:
+                    time.sleep(0.1)
                 for cls_name, conf, pos in detections:
                     if cls_name.lower() == object_class.lower() and conf >= min_confidence:
                         result.detected = True
@@ -144,12 +177,13 @@ def assert_object_detected_by_class(
     return result
 
 
-def assert_min_objects_detected(
+def check_min_objects_detected(
     node: Node, detection_topic: str, min_count: int,
     timeout_sec: float = 10.0,
     count_extractor: Optional[Callable[[Any], int]] = None,
+    executor=None,
 ) -> DetectionResult:
-    """Assert that a minimum number of objects are detected."""
+    """Check that a minimum number of objects are detected."""
     result = DetectionResult()
     max_seen = [0]
 
@@ -164,11 +198,14 @@ def assert_min_objects_detected(
         result.details = f"Failed to subscribe to {detection_topic}: {e}"
         return result
 
-    with _managed_executor(node) as executor:
+    with _managed_executor(node, executor) as (exc, managed):
         try:
             t0 = time.monotonic()
             while time.monotonic() - t0 < timeout_sec:
-                executor.spin_once(timeout_sec=0.1)
+                if managed:
+                    exc.spin_once(timeout_sec=0.1)
+                else:
+                    time.sleep(0.1)
                 if max_seen[0] >= min_count:
                     result.detected = True
                     result.detection_count = max_seen[0]
@@ -182,12 +219,13 @@ def assert_min_objects_detected(
     return result
 
 
-def assert_region_clear(
+def check_region_clear(
     node: Node, detection_topic: str, center: Point, radius: float,
     observation_period_sec: float = 5.0,
     position_extractor: Optional[Callable[[Any], List[Point]]] = None,
+    executor=None,
 ) -> bool:
-    """Assert that a region is clear of detections (safety zone)."""
+    """Check that a region is clear of detections (safety zone)."""
     found = [False]
 
     def cb(msg):
@@ -204,11 +242,14 @@ def assert_region_clear(
     except Exception:
         return True
 
-    with _managed_executor(node) as executor:
+    with _managed_executor(node, executor) as (exc, managed):
         try:
             t0 = time.monotonic()
             while time.monotonic() - t0 < observation_period_sec:
-                executor.spin_once(timeout_sec=0.1)
+                if managed:
+                    exc.spin_once(timeout_sec=0.1)
+                else:
+                    time.sleep(0.1)
                 if found[0]:
                     break
         finally:
@@ -216,7 +257,7 @@ def assert_region_clear(
     return not found[0]
 
 
-# ── Generic message extractors ────────────────────────────────────────────
+# -- Generic message extractors ────────────────────────────────────────────
 
 
 def _extract_positions(msg: Any) -> List[Point]:
@@ -271,3 +312,11 @@ def _extract_count(msg: Any) -> int:
         if hasattr(msg, attr):
             return len(getattr(msg, attr))
     return 0
+
+
+# -- Backward compatibility aliases (deprecated) ──────────────────────────
+
+assert_object_detected = check_object_detected
+assert_object_detected_by_class = check_object_detected_by_class
+assert_min_objects_detected = check_min_objects_detected
+assert_region_clear = check_region_clear

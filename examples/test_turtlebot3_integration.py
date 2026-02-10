@@ -34,7 +34,7 @@ from sim_harness import (
     RequirementValidator,
     ValidationResultCollector,
 )
-from sim_harness.nav2 import assert_lifecycle_node_active
+from sim_harness.nav2 import check_lifecycle_node_active
 
 
 class TestTurtleBot3Integration(SimTestFixture, RequirementValidator):
@@ -248,7 +248,7 @@ class TestTurtleBot3Integration(SimTestFixture, RequirementValidator):
         details_parts = []
 
         for node_name in key_nodes:
-            result = assert_lifecycle_node_active(self.node, node_name, timeout_sec=10.0)
+            result = check_lifecycle_node_active(self.node, node_name, timeout_sec=10.0)
             if result.success:
                 any_active = True
                 details_parts.append(f"{node_name}: active")

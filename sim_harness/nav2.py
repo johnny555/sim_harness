@@ -2,17 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Nav2 extensions — lifecycle management, navigation goals, and path assertions.
+Nav2 extensions -- lifecycle management, navigation goals, and path checks.
+
+Primary API uses ``check_*`` names; ``assert_*`` aliases are provided for
+backward compatibility.
+
+When called from a :class:`SimTestFixture` test (where the node's executor
+is spinning in the background), functions that create temp-node/executor
+pairs in managed mode still work fine.  When ``executor`` is provided
+explicitly, sleep-based waiting is used instead of ``spin_once``.
 
 Example::
 
     from sim_harness import SimTestFixture
-    from sim_harness.nav2 import assert_nav2_active, assert_reaches_goal
+    from sim_harness.nav2 import check_nav2_active, check_reaches_goal
 
     class TestNav(SimTestFixture):
         def test_nav_stack(self):
-            results = assert_nav2_active(self.node)
-            assert all(r.success for r in results)
+            results = check_nav2_active(self.node)
+            assert all(r.ok for r in results)
 """
 
 import math
@@ -33,9 +41,12 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, OccupancyGrid
 from nav2_msgs.action import NavigateToPose
 
-from sim_harness.spin import spin_for_duration
+from sim_harness.spin import (
+    spin_for_duration,
+    wait_for_duration, wait_until_condition,
+)
 
-# ── Types ─────────────────────────────────────────────────────────────────
+# -- Types ─────────────────────────────────────────────────────────────────
 
 
 class LifecycleState(IntEnum):
@@ -63,6 +74,10 @@ class LifecycleResult:
     time_to_reach_ms: float = 0.0
     details: str = ""
 
+    @property
+    def ok(self) -> bool:
+        return self.success
+
 
 @dataclass
 class ControllerResult:
@@ -70,6 +85,10 @@ class ControllerResult:
     controller_name: str = ""
     state: str = "unknown"
     details: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.success
 
 
 @dataclass
@@ -79,6 +98,10 @@ class LocalizationResult:
     covariance_trace: float = float('inf')
     details: str = ""
 
+    @property
+    def ok(self) -> bool:
+        return self.active
+
 
 @dataclass
 class NavigationResult:
@@ -87,8 +110,12 @@ class NavigationResult:
     time_taken_sec: float = 0.0
     details: str = ""
 
+    @property
+    def ok(self) -> bool:
+        return self.success
 
-# ── Helpers ───────────────────────────────────────────────────────────────
+
+# -- Helpers ───────────────────────────────────────────────────────────────
 
 
 def _dist2(a: Tuple[float, float], b: Tuple[float, float]) -> float:
@@ -110,29 +137,65 @@ def _point_to_segment_distance(
     return _dist2(pt, (s[0] + t * dx, s[1] + t * dy))
 
 
-# ── Lifecycle assertions ──────────────────────────────────────────────────
+def _acquire_managed(node, executor):
+    """Set up managed or non-managed executor for nav2 check functions.
+
+    In managed mode, creates a temporary node and SingleThreadedExecutor.
+    In non-managed mode (executor provided or node already in an executor),
+    uses the caller's node directly and sleep-based waiting.
+
+    Returns (svc_node, executor, temp_node_or_None, managed: bool).
+    """
+    if executor is not None:
+        return node, executor, None, False
+
+    # Managed mode: create temp node + executor
+    temp = _temp_node("nav2_checker")
+    exc = SingleThreadedExecutor()
+    exc.add_node(temp)
+    return temp, exc, temp, True
 
 
-def assert_lifecycle_node_active(
+def _spin_once_or_sleep(executor, managed, timeout_sec=0.1):
+    """Spin once if managed, otherwise sleep."""
+    if managed:
+        executor.spin_once(timeout_sec=timeout_sec)
+    else:
+        time.sleep(timeout_sec)
+
+
+def _cleanup_managed(svc_node, client, executor, temp, managed):
+    """Clean up resources from _acquire_managed."""
+    svc_node.destroy_client(client)
+    if managed:
+        executor.remove_node(temp)
+        temp.destroy_node()
+
+
+# -- Lifecycle checks ─────────────────────────────────────────────────────
+
+
+def check_lifecycle_node_active(
     node: Node, lifecycle_node_name: str, timeout_sec: float = 30.0,
+    executor=None,
 ) -> LifecycleResult:
-    """Assert that a lifecycle node reaches the Active state."""
-    return assert_lifecycle_node_state(
+    """Check that a lifecycle node reaches the Active state."""
+    return check_lifecycle_node_state(
         node, lifecycle_node_name, LifecycleState.ACTIVE, timeout_sec,
+        executor=executor,
     )
 
 
-def assert_lifecycle_node_state(
+def check_lifecycle_node_state(
     node: Node, lifecycle_node_name: str,
     expected_state: LifecycleState, timeout_sec: float = 10.0,
+    executor=None,
 ) -> LifecycleResult:
-    """Assert that a lifecycle node is in a specific state."""
-    temp = _temp_node("lifecycle_checker")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp)
+    """Check that a lifecycle node is in a specific state."""
+    svc_node, exc, temp, managed = _acquire_managed(node, executor)
 
     service_name = f"/{lifecycle_node_name}/get_state"
-    client = temp.create_client(GetState, service_name)
+    client = svc_node.create_client(GetState, service_name)
     result = LifecycleResult()
 
     try:
@@ -141,12 +204,12 @@ def assert_lifecycle_node_state(
             if time.monotonic() - start > timeout_sec:
                 result.details = f"Service {service_name} not available"
                 return result
-            executor.spin_once(timeout_sec=0.1)
+            _spin_once_or_sleep(exc, managed)
 
         while time.monotonic() - start < timeout_sec:
             future = client.call_async(GetState.Request())
             while not future.done():
-                executor.spin_once(timeout_sec=0.1)
+                _spin_once_or_sleep(exc, managed)
                 if time.monotonic() - start > timeout_sec:
                     break
             if future.done() and future.result() is not None:
@@ -164,41 +227,39 @@ def assert_lifecycle_node_state(
             f"expected {lifecycle_state_to_string(expected_state)}"
         )
     finally:
-        temp.destroy_client(client)
-        executor.remove_node(temp)
-        temp.destroy_node()
+        _cleanup_managed(svc_node, client, exc, temp, managed)
     return result
 
 
-def assert_lifecycle_nodes_active(
+def check_lifecycle_nodes_active(
     node: Node, names: List[str], timeout_sec: float = 60.0,
+    executor=None,
 ) -> List[LifecycleResult]:
-    """Assert that multiple lifecycle nodes are all active."""
+    """Check that multiple lifecycle nodes are all active."""
     results = []
     remaining = timeout_sec
     for name in names:
         t0 = time.monotonic()
-        results.append(assert_lifecycle_node_active(node, name, remaining))
+        results.append(check_lifecycle_node_active(
+            node, name, remaining, executor=executor))
         remaining = max(1.0, remaining - (time.monotonic() - t0))
     return results
 
 
-# ── Controller assertions ─────────────────────────────────────────────────
+# -- Controller checks ────────────────────────────────────────────────────
 
 
-def assert_controller_active(
+def check_controller_active(
     node: Node, controller_manager_name: str, controller_name: str,
-    timeout_sec: float = 30.0,
+    timeout_sec: float = 30.0, executor=None,
 ) -> ControllerResult:
-    """Assert that a ros2_control controller is active."""
+    """Check that a ros2_control controller is active."""
     from controller_manager_msgs.srv import ListControllers
 
-    temp = _temp_node("ctrl_checker")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp)
+    svc_node, exc, temp, managed = _acquire_managed(node, executor)
 
     service_name = f"/{controller_manager_name}/list_controllers"
-    client = temp.create_client(ListControllers, service_name)
+    client = svc_node.create_client(ListControllers, service_name)
     result = ControllerResult(controller_name=controller_name)
 
     try:
@@ -207,12 +268,12 @@ def assert_controller_active(
             if time.monotonic() - start > timeout_sec:
                 result.details = f"Service {service_name} not available"
                 return result
-            executor.spin_once(timeout_sec=0.1)
+            _spin_once_or_sleep(exc, managed)
 
         while time.monotonic() - start < timeout_sec:
             future = client.call_async(ListControllers.Request())
             while not future.done():
-                executor.spin_once(timeout_sec=0.1)
+                _spin_once_or_sleep(exc, managed)
                 if time.monotonic() - start > timeout_sec:
                     break
             if future.done() and future.result() is not None:
@@ -226,81 +287,85 @@ def assert_controller_active(
             time.sleep(0.1)
         result.details = f"Controller {controller_name} state: {result.state}"
     finally:
-        temp.destroy_client(client)
-        executor.remove_node(temp)
-        temp.destroy_node()
+        _cleanup_managed(svc_node, client, exc, temp, managed)
     return result
 
 
-def assert_controllers_active(
+def check_controllers_active(
     node: Node, controller_manager_name: str,
     controller_names: List[str], timeout_sec: float = 30.0,
+    executor=None,
 ) -> List[ControllerResult]:
-    """Assert that multiple controllers are active."""
+    """Check that multiple controllers are active."""
     results = []
     remaining = timeout_sec
     for name in controller_names:
         t0 = time.monotonic()
-        results.append(assert_controller_active(node, controller_manager_name, name, remaining))
+        results.append(check_controller_active(
+            node, controller_manager_name, name, remaining, executor=executor))
         remaining = max(1.0, remaining - (time.monotonic() - t0))
     return results
 
 
-def assert_controller_manager_available(
+def check_controller_manager_available(
     node: Node, controller_manager_name: str, timeout_sec: float = 30.0,
+    executor=None,
 ) -> bool:
-    """Assert that the controller manager is available."""
+    """Check that the controller manager is available."""
     from controller_manager_msgs.srv import ListControllers
-    temp = _temp_node("cm_checker")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp)
-    client = temp.create_client(ListControllers, f"/{controller_manager_name}/list_controllers")
+
+    svc_node, exc, temp, managed = _acquire_managed(node, executor)
+
+    client = svc_node.create_client(
+        ListControllers, f"/{controller_manager_name}/list_controllers")
     try:
         return client.wait_for_service(timeout_sec=timeout_sec)
     finally:
-        temp.destroy_client(client)
-        executor.remove_node(temp)
-        temp.destroy_node()
+        _cleanup_managed(svc_node, client, exc, temp, managed)
 
 
-# ── Stack-level shortcuts ─────────────────────────────────────────────────
+# -- Stack-level shortcuts ─────────────────────────────────────────────────
 
 
-def assert_nav2_active(
+def check_nav2_active(
     node: Node, namespace: str = "", timeout_sec: float = 60.0,
+    executor=None,
 ) -> List[LifecycleResult]:
-    """Assert that the Nav2 navigation stack is fully active."""
+    """Check that the Nav2 navigation stack is fully active."""
     nodes = ["bt_navigator", "controller_server", "planner_server",
              "recoveries_server", "waypoint_follower"]
     if namespace:
         nodes = [f"{namespace}/{n}" for n in nodes]
-    return assert_lifecycle_nodes_active(node, nodes, timeout_sec)
+    return check_lifecycle_nodes_active(node, nodes, timeout_sec,
+                                        executor=executor)
 
 
-def assert_slam_toolbox_active(
+def check_slam_toolbox_active(
     node: Node, node_name: str = "slam_toolbox", timeout_sec: float = 30.0,
+    executor=None,
 ) -> LifecycleResult:
-    """Assert that SLAM Toolbox is active."""
-    return assert_lifecycle_node_active(node, node_name, timeout_sec)
+    """Check that SLAM Toolbox is active."""
+    return check_lifecycle_node_active(node, node_name, timeout_sec,
+                                       executor=executor)
 
 
-def assert_localization_active(
+def check_localization_active(
     node: Node, node_name: str = "amcl",
     max_covariance_trace: float = 1.0, timeout_sec: float = 30.0,
-    pose_topic: str = "/amcl_pose",
+    pose_topic: str = "/amcl_pose", executor=None,
 ) -> LocalizationResult:
-    """Assert that localization (AMCL) is active and converged."""
+    """Check that localization (AMCL) is active and converged."""
     from geometry_msgs.msg import PoseWithCovarianceStamped
 
-    lifecycle = assert_lifecycle_node_active(node, node_name, timeout_sec)
+    lifecycle = check_lifecycle_node_active(node, node_name, timeout_sec,
+                                            executor=executor)
     result = LocalizationResult(active=lifecycle.success)
     if not lifecycle.success:
         result.details = lifecycle.details
         return result
 
-    temp = _temp_node("localization_checker")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp)
+    svc_node, exc, temp, managed = _acquire_managed(node, executor)
+
     pose_msg = None
 
     def cb(msg):
@@ -309,12 +374,12 @@ def assert_localization_active(
 
     qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                       durability=DurabilityPolicy.VOLATILE)
-    sub = temp.create_subscription(PoseWithCovarianceStamped, pose_topic, cb, qos)
+    sub = svc_node.create_subscription(PoseWithCovarianceStamped, pose_topic, cb, qos)
 
     try:
         t0 = time.monotonic()
         while pose_msg is None and time.monotonic() - t0 < 5.0:
-            executor.spin_once(timeout_sec=0.1)
+            _spin_once_or_sleep(exc, managed)
         if pose_msg is not None:
             cov = pose_msg.pose.covariance
             result.covariance_trace = cov[0] + cov[7] + cov[35]
@@ -323,22 +388,24 @@ def assert_localization_active(
         else:
             result.details = "No pose received from AMCL"
     finally:
-        temp.destroy_subscription(sub)
-        executor.remove_node(temp)
-        temp.destroy_node()
+        svc_node.destroy_subscription(sub)
+        if managed:
+            exc.remove_node(temp)
+            temp.destroy_node()
     return result
 
 
-# ── Navigation assertions ─────────────────────────────────────────────────
+# -- Navigation checks ────────────────────────────────────────────────────
 
 
-def assert_reaches_goal(
+def check_reaches_goal(
     node: Node, goal_pose: PoseStamped, tolerance: float = 0.5,
     timeout_sec: float = 60.0, odom_topic: str = "/odom",
+    executor=None,
 ) -> NavigationResult:
-    """Assert that the robot reaches a goal position via odometry."""
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
+    """Check that the robot reaches a goal position via odometry."""
+    from sim_harness.checks import _acquire_executor
+    exc, managed = _acquire_executor(node, executor)
     goal_xy = (goal_pose.pose.position.x, goal_pose.pose.position.y)
     latest_pos: List[Optional[Tuple[float, float]]] = [None]
     qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -353,7 +420,10 @@ def assert_reaches_goal(
     try:
         t0 = time.monotonic()
         while time.monotonic() - t0 < timeout_sec:
-            executor.spin_once(timeout_sec=0.1)
+            if managed:
+                exc.spin_once(timeout_sec=0.1)
+            else:
+                time.sleep(0.1)
             if latest_pos[0] is not None:
                 d = _dist2(latest_pos[0], goal_xy)
                 result.final_distance_to_goal = d
@@ -366,20 +436,22 @@ def assert_reaches_goal(
         result.details = f"Timeout after {result.time_taken_sec:.1f}s, dist {result.final_distance_to_goal:.2f}m"
     finally:
         node.destroy_subscription(sub)
-        executor.remove_node(node)
+        if managed:
+            exc.remove_node(node)
     return result
 
 
-def assert_follows_path(
+def check_follows_path(
     node: Node, path: List[PoseStamped], corridor_width: float = 1.0,
     timeout_sec: float = 60.0, odom_topic: str = "/odom",
+    executor=None,
 ) -> NavigationResult:
-    """Assert that the robot follows a path within a corridor."""
+    """Check that the robot follows a path within a corridor."""
     if len(path) < 2:
         return NavigationResult(details="Path must have at least 2 waypoints")
 
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
+    from sim_harness.checks import _acquire_executor
+    exc, managed = _acquire_executor(node, executor)
     pts = [(p.pose.position.x, p.pose.position.y) for p in path]
     max_dev = [0.0]
     latest_pos: List[Optional[Tuple[float, float]]] = [None]
@@ -398,7 +470,10 @@ def assert_follows_path(
     try:
         t0 = time.monotonic()
         while time.monotonic() - t0 < timeout_sec:
-            executor.spin_once(timeout_sec=0.1)
+            if managed:
+                exc.spin_once(timeout_sec=0.1)
+            else:
+                time.sleep(0.1)
             if max_dev[0] > corridor_width:
                 result.time_taken_sec = time.monotonic() - t0
                 result.details = f"Exceeded corridor: {max_dev[0]:.2f}m > {corridor_width}m"
@@ -415,19 +490,28 @@ def assert_follows_path(
         result.details = f"Timeout, max deviation: {max_dev[0]:.2f}m"
     finally:
         node.destroy_subscription(sub)
-        executor.remove_node(node)
+        if managed:
+            exc.remove_node(node)
     return result
 
 
-def assert_navigation_action_succeeds(
+def check_navigation_action_succeeds(
     node: Node, goal_pose: PoseStamped, timeout_sec: float = 120.0,
-    action_name: str = "/navigate_to_pose",
+    action_name: str = "/navigate_to_pose", executor=None,
 ) -> NavigationResult:
     """Send NavigateToPose action and wait for completion."""
-    temp = _temp_node("nav_action_client")
-    executor = SingleThreadedExecutor()
-    executor.add_node(temp)
-    client = ActionClient(temp, NavigateToPose, action_name)
+    managed = executor is None
+    if managed:
+        temp = _temp_node("nav_action_client")
+        action_node = temp
+        exc = SingleThreadedExecutor()
+        exc.add_node(temp)
+    else:
+        action_node = node
+        temp = None
+        exc = executor
+
+    client = ActionClient(action_node, NavigateToPose, action_name)
     result = NavigationResult()
 
     try:
@@ -441,7 +525,7 @@ def assert_navigation_action_succeeds(
         t0 = time.monotonic()
 
         while not future.done():
-            executor.spin_once(timeout_sec=0.1)
+            _spin_once_or_sleep(exc, managed)
             if time.monotonic() - t0 > timeout_sec:
                 result.details = "Timeout waiting for goal acceptance"
                 return result
@@ -453,7 +537,7 @@ def assert_navigation_action_succeeds(
 
         result_future = handle.get_result_async()
         while not result_future.done():
-            executor.spin_once(timeout_sec=0.1)
+            _spin_once_or_sleep(exc, managed)
             if time.monotonic() - t0 > timeout_sec:
                 result.details = "Timeout waiting for navigation result"
                 return result
@@ -468,28 +552,34 @@ def assert_navigation_action_succeeds(
             result.details = f"Navigation failed with status {action_result.status}"
     finally:
         client.destroy()
-        executor.remove_node(temp)
-        temp.destroy_node()
+        if managed:
+            exc.remove_node(temp)
+            temp.destroy_node()
     return result
 
 
-def assert_costmap_contains_obstacle(
+def check_costmap_contains_obstacle(
     node: Node, position: Tuple[float, float],
     costmap_topic: str = "/local_costmap/costmap",
     min_cost: int = 100, timeout_sec: float = 5.0,
+    executor=None,
 ) -> bool:
     """Check that the costmap contains an obstacle at a position."""
+    from sim_harness.checks import _acquire_executor
     msgs: list = []
     qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                       durability=DurabilityPolicy.VOLATILE)
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
+    exc, managed = _acquire_executor(node, executor)
     sub = node.create_subscription(OccupancyGrid, costmap_topic, msgs.append, qos)
     try:
-        spin_for_duration(executor, timeout_sec)
+        if managed:
+            spin_for_duration(exc, timeout_sec)
+        else:
+            wait_for_duration(timeout_sec)
     finally:
         node.destroy_subscription(sub)
-        executor.remove_node(node)
+        if managed:
+            exc.remove_node(node)
 
     if not msgs:
         return False
@@ -499,3 +589,20 @@ def assert_costmap_contains_obstacle(
     if gx < 0 or gx >= cm.info.width or gy < 0 or gy >= cm.info.height:
         return False
     return cm.data[gy * cm.info.width + gx] >= min_cost
+
+
+# -- Backward compatibility aliases (deprecated) ──────────────────────────
+
+assert_lifecycle_node_active = check_lifecycle_node_active
+assert_lifecycle_node_state = check_lifecycle_node_state
+assert_lifecycle_nodes_active = check_lifecycle_nodes_active
+assert_controller_active = check_controller_active
+assert_controllers_active = check_controllers_active
+assert_controller_manager_available = check_controller_manager_available
+assert_nav2_active = check_nav2_active
+assert_slam_toolbox_active = check_slam_toolbox_active
+assert_localization_active = check_localization_active
+assert_reaches_goal = check_reaches_goal
+assert_follows_path = check_follows_path
+assert_navigation_action_succeeds = check_navigation_action_succeeds
+assert_costmap_contains_obstacle = check_costmap_contains_obstacle

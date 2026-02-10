@@ -97,20 +97,30 @@ class SimulationLauncher:
         # Build environment
         env = os.environ.copy()
         env.update(config.env_vars)
+        if 'DISPLAY' not in env:
+            env['DISPLAY'] = ':0'
 
         # Start the process
         # Note: stdout must NOT be PIPE unless actively read, as the buffer
         # fills and blocks the subprocess (especially Gazebo's verbose output).
+        print(f"[SimLauncher] Starting: {' '.join(cmd)}", flush=True)
+        print(f"[SimLauncher] ROS_DOMAIN_ID={env.get('ROS_DOMAIN_ID', 'NOT SET')}, "
+              f"GZ_PARTITION={env.get('GZ_PARTITION', 'NOT SET')}, "
+              f"DISPLAY={env.get('DISPLAY', 'NOT SET')}", flush=True)
+        log_path = f'/tmp/sim_launch_{os.getpid()}.log'
+        print(f"[SimLauncher] Log: {log_path}", flush=True)
+        log_file = open(log_path, 'w')
         try:
             self._process = subprocess.Popen(
                 cmd,
                 env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
                 preexec_fn=os.setsid  # Create new process group for cleanup
             )
         except Exception as e:
             print(f"Failed to start simulation: {e}")
+            log_file.close()
             return False
 
         if wait_for_ready:
@@ -127,6 +137,10 @@ class SimulationLauncher:
         the launch config's gazebo_startup_delay_sec setting to allow
         for full initialization.
 
+        Also monitors the launched subprocess — if it dies before Gazebo
+        is detected, returns immediately instead of waiting for the full
+        timeout.
+
         Note:
             Total wait time may exceed timeout_sec due to the additional
             startup delay applied after Gazebo processes are detected.
@@ -135,13 +149,35 @@ class SimulationLauncher:
             timeout_sec: Maximum time to wait for Gazebo processes
 
         Returns:
-            True if ready, False on timeout
+            True if ready, False on timeout or subprocess death
         """
-        if self._gazebo.wait_until_ready(timeout_sec):
-            # Additional delay for full initialization
-            if self._config:
-                time.sleep(self._config.gazebo_startup_delay_sec)
-            return True
+        start = time.monotonic()
+        print(f"[SimLauncher] Waiting for ready (timeout={timeout_sec}s)...",
+              flush=True)
+        logged_at = 0
+        while time.monotonic() - start < timeout_sec:
+            elapsed = time.monotonic() - start
+            # Check if our launch subprocess died
+            if self._process is not None and self._process.poll() is not None:
+                print(f"[SimLauncher] Subprocess exited with code "
+                      f"{self._process.returncode} after {elapsed:.1f}s",
+                      flush=True)
+                return False
+            if self._gazebo.is_running():
+                # Gazebo detected — wait for full initialization
+                print(f"[SimLauncher] Gazebo detected after {elapsed:.1f}s",
+                      flush=True)
+                time.sleep(0.5)
+                if self._config:
+                    time.sleep(self._config.gazebo_startup_delay_sec)
+                return True
+            if int(elapsed) > logged_at and int(elapsed) % 10 == 0:
+                logged_at = int(elapsed)
+                poll = (self._process.poll() if self._process else 'N/A')
+                print(f"[SimLauncher] Still waiting... {elapsed:.0f}s "
+                      f"(process poll={poll})", flush=True)
+            time.sleep(0.1)
+        print(f"[SimLauncher] Timeout after {timeout_sec}s", flush=True)
         return False
 
     def stop(self, timeout_sec: float = 10.0) -> None:

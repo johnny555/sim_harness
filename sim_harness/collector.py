@@ -3,6 +3,8 @@
 
 """Lightweight message collector for ROS 2 topics."""
 
+import threading
+
 from rclpy.qos import QoSProfile
 
 
@@ -11,34 +13,43 @@ class MessageCollector:
 
     Managed automatically when created via
     :meth:`SimTestFixture.create_message_collector`.
+
+    Thread-safe: callbacks may fire from a background executor thread while
+    the test thread reads messages.
     """
 
     def __init__(self, node, topic: str, msg_type, qos_profile=None, max_messages=None):
         self._messages = []
+        self._lock = threading.Lock()
         self._max = max_messages
         self._node = node
         qos = qos_profile or QoSProfile(depth=10)
         self._sub = node.create_subscription(msg_type, topic, self._on_msg, qos)
 
     def _on_msg(self, msg):
-        if self._max is None or len(self._messages) < self._max:
-            self._messages.append(msg)
+        with self._lock:
+            if self._max is None or len(self._messages) < self._max:
+                self._messages.append(msg)
 
     def get_messages(self):
         """Return a copy of all collected messages."""
-        return list(self._messages)
+        with self._lock:
+            return list(self._messages)
 
     def count(self) -> int:
         """Number of messages received so far."""
-        return len(self._messages)
+        with self._lock:
+            return len(self._messages)
 
     def clear(self):
         """Discard all collected messages."""
-        self._messages.clear()
+        with self._lock:
+            self._messages.clear()
 
     def latest(self):
         """Most recent message, or ``None``."""
-        return self._messages[-1] if self._messages else None
+        with self._lock:
+            return self._messages[-1] if self._messages else None
 
     def destroy(self):
         """Remove the underlying subscription."""

@@ -11,6 +11,7 @@ restarting when test configurations differ substantially.
 import atexit
 import hashlib
 import os
+import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
@@ -22,6 +23,38 @@ from sim_harness.simulator.simulation_launcher import (
     LaunchConfig,
 )
 import random
+
+
+def _discover_ros_domain_from_running_nodes() -> Optional[int]:
+    """Read ROS_DOMAIN_ID from the environment of a running ROS 2 node process.
+
+    Searches for known Nav2 processes (planner_server, controller_server) and
+    reads their ``/proc/<pid>/environ`` to find the domain they launched on.
+
+    Returns:
+        The domain ID if found, or None.
+    """
+    for pattern in ("planner_server", "controller_server", "bt_navigator"):
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", pattern],
+                capture_output=True, text=True, timeout=3,
+            )
+            for line in result.stdout.strip().split('\n'):
+                if not line:
+                    continue
+                pid = int(line)
+                try:
+                    with open(f"/proc/{pid}/environ", "rb") as f:
+                        env_bytes = f.read()
+                    for entry in env_bytes.split(b'\x00'):
+                        if entry.startswith(b'ROS_DOMAIN_ID='):
+                            return int(entry.split(b'=', 1)[1])
+                except (OSError, ValueError):
+                    continue
+        except Exception:
+            continue
+    return None
 
 
 @dataclass
@@ -194,14 +227,22 @@ class SimulationManager:
             if self._launcher is not None and self._started_by_us:
                 self._stop_internal()
 
-            # Apply test isolation (unique ROS_DOMAIN_ID)
-            self._isolation_domain_id = random.randint(1, 230)
-            os.environ['ROS_DOMAIN_ID'] = str(self._isolation_domain_id)
-
             # Check if a functional simulation is already running externally
-            # Use is_responsive() not is_running() to detect zombie processes
+            # BEFORE changing domain ID — the external sim may be on a
+            # specific domain and we need to adopt it, not override it.
             if self._gazebo.is_responsive():
-                # External simulation running and responsive - try to use it
+                # External simulation running and responsive — adopt its
+                # domain ID so the test node communicates on the same domain.
+                ext_domain = _discover_ros_domain_from_running_nodes()
+                if ext_domain is not None:
+                    self._isolation_domain_id = ext_domain
+                else:
+                    # Fall back to current env value
+                    self._isolation_domain_id = int(
+                        os.environ.get('ROS_DOMAIN_ID', 0))
+                os.environ['ROS_DOMAIN_ID'] = str(self._isolation_domain_id)
+                print(f"[SimManager] Reusing responsive external simulation "
+                      f"(domain {self._isolation_domain_id})", flush=True)
                 self._current_request = request
                 self._current_hash = request_hash
                 self._started_by_us = False
@@ -210,10 +251,21 @@ class SimulationManager:
 
             # If processes exist but aren't responsive, kill them (zombie cleanup)
             if self._gazebo.is_running():
+                print("[SimManager] Killing unresponsive Gazebo processes",
+                      flush=True)
                 self._gazebo.kill_gazebo()
                 time.sleep(1.0)  # Brief wait for processes to terminate
 
+            # Apply test isolation (unique ROS_DOMAIN_ID) for the new sim
+            self._isolation_domain_id = random.randint(100, 199)
+            os.environ['ROS_DOMAIN_ID'] = str(self._isolation_domain_id)
+            print(f"[SimManager] Domain ID set to {self._isolation_domain_id}",
+                  flush=True)
+
             # Start new simulation
+            print(f"[SimManager] Starting new simulation "
+                  f"(timeout={startup_timeout}s, delay={gazebo_delay}s)",
+                  flush=True)
             success = self._start_internal(
                 request, startup_timeout, gazebo_delay
             )
@@ -307,7 +359,7 @@ class SimulationManager:
         """Check if current simulation can be reused for request."""
         if not self._gazebo.is_running():
             return False
-        if self._current_hash == "":
+        if not self._current_hash:
             return False
         return self._current_hash == request_hash
 
@@ -323,9 +375,9 @@ class SimulationManager:
 
         # Build env vars with isolation
         env_vars: Dict[str, str] = {}
-        if self._isolation_config:
-            env_vars['ROS_DOMAIN_ID'] = str(self._isolation_config.domain_id)
-            env_vars['GZ_PARTITION'] = self._isolation_config.gz_partition
+        if self._isolation_domain_id is not None:
+            env_vars['ROS_DOMAIN_ID'] = str(self._isolation_domain_id)
+            env_vars['GZ_PARTITION'] = f'gz_test_{self._isolation_domain_id}'
 
         config = request.to_launch_config(
             env_vars=env_vars,
@@ -333,7 +385,10 @@ class SimulationManager:
             gazebo_delay=gazebo_delay,
         )
 
-        return self._launcher.start(config, wait_for_ready=True)
+        success = self._launcher.start(config, wait_for_ready=True)
+        if not success:
+            self._launcher.stop()  # Clean up so next attempt doesn't hit "already running"
+        return success
 
     def _stop_internal(self) -> None:
         """Internal method to stop simulation (must hold lock)."""

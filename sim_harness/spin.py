@@ -26,3 +26,21 @@ def spin_until_condition(executor, condition, timeout_sec: float) -> bool:
 def spin_until_messages_received(executor, collector, count: int, timeout_sec: float) -> bool:
     """Spin until *collector* has at least *count* messages."""
     return spin_until_condition(executor, lambda: collector.count() >= count, timeout_sec)
+
+
+# -- Sleep-based alternatives (for use when executor spins in background) ---
+
+
+def wait_for_duration(duration_sec: float) -> None:
+    """Sleep for *duration_sec*. Use when executor is spinning in a background thread."""
+    time.sleep(duration_sec)
+
+
+def wait_until_condition(condition, timeout_sec: float) -> bool:
+    """Poll *condition()* with sleep until True or timeout."""
+    end = time.monotonic() + timeout_sec
+    while time.monotonic() < end:
+        if condition():
+            return True
+        time.sleep(0.05)
+    return False

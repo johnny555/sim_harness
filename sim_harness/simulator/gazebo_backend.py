@@ -24,6 +24,7 @@ from sim_harness.simulator.simulator_interface import (
 # Patterns to match Gazebo processes
 GAZEBO_PROCESS_PATTERNS = [
     "gz sim",
+    "gz-sim",
     "ruby.*gz",
     "gzserver",
     "gzclient",
@@ -67,14 +68,23 @@ def _is_gazebo_process(pid: int) -> bool:
         gazebo_exes = {"gz", "gzserver", "gzclient", "ruby", "gz-sim"}
         if exe_name in gazebo_exes:
             return True
-        # Also check if the command starts with gz (not just contains it)
+        # Handle versioned ruby (e.g. ruby3.2)
+        if exe_name.startswith("ruby"):
+            return True
+        # Read cmdline for further checks
         with open(f"/proc/{pid}/cmdline", "rb") as f:
             cmdline = f.read().decode("utf-8", errors="replace")
-            # cmdline uses null bytes as separators
             args = cmdline.split('\x00')
             if args and args[0]:
                 cmd_name = os.path.basename(args[0])
                 if cmd_name in gazebo_exes or cmd_name.startswith("gz-"):
+                    return True
+            # Handle shell wrappers: /bin/sh -c "ruby .../gz sim ..."
+            # ros2 launch wraps Gazebo commands in /bin/sh -c
+            if exe_name in ("sh", "bash", "dash"):
+                cmdline_str = " ".join(a for a in args if a)
+                if any(marker in cmdline_str for marker in
+                       ("gz sim", "gzserver", "gzclient")):
                     return True
         return False
     except (OSError, IOError):

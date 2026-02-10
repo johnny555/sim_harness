@@ -4,25 +4,31 @@
 """
 Test fixture for ROS 2 simulation tests.
 
+Uses a MultiThreadedExecutor spinning in a background thread so that ROS 2
+action client callbacks are processed concurrently with test logic.
+
 Example::
 
-    from sim_harness import SimTestFixture, assert_lidar_valid
+    from sim_harness import SimTestFixture
+    from sim_harness.checks import check_lidar_valid
 
     class TestMyRobot(SimTestFixture):
         LAUNCH_PACKAGE = 'my_robot_sim'
         LAUNCH_FILE = 'sim.launch.py'
 
         def test_lidar(self):
-            result = assert_lidar_valid(self.node, '/scan')
-            assert result.valid, result.details
+            result = check_lidar_valid(self.node, '/scan')
+            assert result.ok, result.details
 """
 
 import os
 import random
+import threading
+import time
 
 import pytest
 import rclpy
-from rclpy.executors import SingleThreadedExecutor
+from rclpy.executors import MultiThreadedExecutor, SingleThreadedExecutor
 from rclpy.parameter import Parameter
 
 from sim_harness.collector import MessageCollector
@@ -34,6 +40,9 @@ class SimTestFixture:
 
     Provides a ROS node, executor, message collection, and spin helpers.
     Set ``LAUNCH_PACKAGE`` / ``LAUNCH_FILE`` to manage a Gazebo simulation.
+
+    The executor runs in a background thread so action-client callbacks are
+    processed without requiring explicit spin calls.
     """
 
     _rclpy_initialized: bool = False
@@ -53,8 +62,10 @@ class SimTestFixture:
     def setup_ros(self):
         """Autouse fixture: simulation (if configured) -> node -> on_setup."""
         sim_managed = self._setup_simulation()
-        self._setup_node()
+        self._setup_node(skip_domain_randomization=sim_managed)
         try:
+            # on_setup runs BEFORE the spin thread starts, so action client
+            # creation doesn't race with the executor's wait-set reads.
             self.on_setup()
         except BaseException:
             self.on_teardown()
@@ -62,6 +73,11 @@ class SimTestFixture:
             if sim_managed:
                 self._release_simulation()
             raise
+        # Start background executor AFTER on_setup so all subscriptions and
+        # action clients are registered before the first rcl_wait() call.
+        self._spin_thread = threading.Thread(
+            target=self._executor.spin, daemon=True)
+        self._spin_thread.start()
         yield
         self.on_teardown()
         self._teardown_node()
@@ -76,9 +92,12 @@ class SimTestFixture:
 
     # -- Node lifecycle -----------------------------------------------------
 
-    def _setup_node(self):
-        domain = random.randint(1, 230)
-        os.environ['ROS_DOMAIN_ID'] = str(domain)
+    def _setup_node(self, skip_domain_randomization: bool = False):
+        if skip_domain_randomization:
+            domain = int(os.environ.get('ROS_DOMAIN_ID', 0))
+        else:
+            domain = random.randint(100, 199)
+            os.environ['ROS_DOMAIN_ID'] = str(domain)
 
         if not SimTestFixture._rclpy_initialized:
             rclpy.init()
@@ -96,17 +115,50 @@ class SimTestFixture:
                 Parameter('use_sim_time', Parameter.Type.BOOL, True),
             ],
         )
-        self._executor = SingleThreadedExecutor()
+        self._executor = MultiThreadedExecutor(num_threads=2)
         self._executor.add_node(self._node)
         self._collectors = {}
+        self._active_goal_handles = []
+        self._goal_handles_lock = threading.Lock()
+        # Spin thread is started in setup_ros after on_setup() completes
 
     def _teardown_node(self):
+        # Cancel any active action goals (executor must still be running)
+        with self._goal_handles_lock:
+            handles = list(self._active_goal_handles)
+            self._active_goal_handles.clear()
+        for gh in handles:
+            try:
+                gh.cancel_goal_async()
+            except Exception:
+                pass
+        if handles:
+            time.sleep(0.5)
+
+        # Stop background spin thread FIRST — no more wait-set reads after this
+        if hasattr(self, '_executor'):
+            self._executor.shutdown()
+        if hasattr(self, '_spin_thread'):
+            self._spin_thread.join(timeout=2.0)
+
+        # Now safe to destroy subscriptions and collectors (wait set is idle)
         for c in self._collectors.values():
-            c.destroy()
+            try:
+                c.destroy()
+            except Exception:
+                pass
         self._collectors.clear()
+
+        # Clean up node
         if hasattr(self, '_executor') and hasattr(self, '_node'):
-            self._executor.remove_node(self._node)
-            self._node.destroy_node()
+            try:
+                self._executor.remove_node(self._node)
+            except Exception:
+                pass
+            try:
+                self._node.destroy_node()
+            except Exception:
+                pass
 
     @classmethod
     def teardown_class(cls):
@@ -187,10 +239,37 @@ class SimTestFixture:
     # -- Spin helpers -------------------------------------------------------
 
     def spin_for_duration(self, duration_sec: float):
-        spin_for_duration(self._executor, duration_sec)
+        """Wait for *duration_sec* while background executor processes callbacks."""
+        time.sleep(duration_sec)
 
     def spin_until_condition(self, condition, timeout_sec: float) -> bool:
-        return spin_until_condition(self._executor, condition, timeout_sec)
+        """Poll *condition()* until True or timeout."""
+        end = time.monotonic() + timeout_sec
+        while time.monotonic() < end:
+            if condition():
+                return True
+            time.sleep(0.05)
+        return False
+
+    # -- Goal handle tracking -----------------------------------------------
+
+    def register_goal_handle(self, goal_handle):
+        """Register an action goal handle for automatic cancellation on teardown.
+
+        Call this after a successful ``send_goal_async`` to ensure the goal
+        is canceled when the test finishes, preventing stale controller state
+        in subsequent tests.
+        """
+        with self._goal_handles_lock:
+            self._active_goal_handles.append(goal_handle)
+
+    def unregister_goal_handle(self, goal_handle):
+        """Remove a goal handle from tracking (e.g. after it completes)."""
+        with self._goal_handles_lock:
+            try:
+                self._active_goal_handles.remove(goal_handle)
+            except ValueError:
+                pass
 
     # -- Message collectors -------------------------------------------------
 
@@ -220,7 +299,7 @@ def ros_node():
     if not SimTestFixture._rclpy_initialized:
         rclpy.init()
         SimTestFixture._rclpy_initialized = True
-    d = random.randint(1, 230)
+    d = random.randint(100, 199)
     os.environ['ROS_DOMAIN_ID'] = str(d)
     node = rclpy.create_node(
         f"pytest_{d}_{random.randint(0, 9999):04d}",

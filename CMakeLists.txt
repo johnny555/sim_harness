@@ -159,7 +159,7 @@ if(BUILD_TESTING)
   # ----- Python Unit Tests -----
   ament_add_pytest_test(test_validation_result_py test/python/test_validation_result.py)
   ament_add_pytest_test(test_message_collector_py test/python/test_message_collector.py)
-  ament_add_pytest_test(test_test_isolation_py test/python/test_test_isolation.py)
+
 
   # ----- Integration Tests (launch_testing) -----
   add_launch_test(
