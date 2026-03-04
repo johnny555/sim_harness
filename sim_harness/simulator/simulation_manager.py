@@ -252,12 +252,13 @@ class SimulationManager:
             if self._gazebo.is_running():
                 print("[SimManager] Killing unresponsive Gazebo processes",
                       flush=True)
-                self._gazebo.kill_gazebo()
+                self._gazebo.kill_all_sim_processes()
                 time.sleep(1.0)  # Brief wait for processes to terminate
 
-            # Apply test isolation (unique ROS_DOMAIN_ID) for the new sim
+            # Apply test isolation (unique ROS_DOMAIN_ID + GZ_PARTITION)
             self._isolation_domain_id = random.randint(100, 199)
             os.environ['ROS_DOMAIN_ID'] = str(self._isolation_domain_id)
+            os.environ['GZ_PARTITION'] = f'gz_test_{self._isolation_domain_id}'
             print(f"[SimManager] Domain ID set to {self._isolation_domain_id}",
                   flush=True)
 
@@ -333,6 +334,16 @@ class SimulationManager:
 
             self._stop_internal()
 
+            # Wait for all Gazebo processes to fully exit before restarting.
+            # kill_gazebo() sends SIGKILL but doesn't wait for process exit.
+            # Without this wait, the new sim may fail to bind ports still held
+            # by dying processes.
+            deadline = time.monotonic() + 15.0
+            while time.monotonic() < deadline:
+                if not self._gazebo.is_running():
+                    break
+                time.sleep(0.5)
+
             success = self._start_internal(request, startup_timeout, gazebo_delay)
             if success:
                 self._current_request = request
@@ -394,8 +405,8 @@ class SimulationManager:
         if self._launcher is not None:
             self._launcher.stop()
 
-        # Also kill any orphaned Gazebo processes
-        self._gazebo.kill_gazebo()
+        # Also kill any orphaned Gazebo and ROS sim processes
+        self._gazebo.kill_all_sim_processes()
 
         self._current_request = None
         self._current_hash = ""

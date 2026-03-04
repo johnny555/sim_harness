@@ -43,9 +43,32 @@ class SimTestFixture:
 
     The executor runs in a background thread so action-client callbacks are
     processed without requiring explicit spin calls.
+
+    Declarative readiness checks
+    ----------------------------
+    Override these class variables to gate test execution on simulation
+    readiness.  Checks run **once per class** (not per test) after the
+    simulation is confirmed running.
+
+    ``READINESS_LIFECYCLE_NODES``
+        Lifecycle node names that must reach *Active*, e.g.
+        ``['ns/planner_server', 'ns/controller_server']``.
+    ``READINESS_TOPICS``
+        ``(topic, msg_type, expected_rate_hz)`` tuples, e.g.
+        ``[('/odom', Odometry, 10.0)]``.
+    ``READINESS_TF_FRAMES``
+        ``(target_frame, source_frame)`` pairs, e.g.
+        ``[('odom', 'base_link')]``.
+    ``READINESS_TIMEOUT``
+        Per-check timeout in seconds (default 120).
+    ``READINESS_MAX_ATTEMPTS``
+        Retry count per check (default 3).
+
+    For custom one-time readiness logic, override :meth:`on_sim_ready`.
     """
 
     _rclpy_initialized: bool = False
+    _readiness_completed: set = set()
 
     # Simulation management (optional — leave empty if not needed)
     LAUNCH_PACKAGE: str = ""
@@ -58,10 +81,30 @@ class SimTestFixture:
     REQUIRE_SIM: bool = True
     USE_EXISTING_SIM: bool = False
 
+    # Declarative readiness checks (override in subclasses)
+    READINESS_LIFECYCLE_NODES: list = []
+    READINESS_TOPICS: list = []
+    READINESS_TF_FRAMES: list = []
+    READINESS_TIMEOUT: float = 120.0
+    READINESS_MAX_ATTEMPTS: int = 3
+
     @pytest.fixture(autouse=True)
     def setup_ros(self):
-        """Autouse fixture: simulation (if configured) -> node -> on_setup."""
+        """Autouse fixture: simulation (if configured) -> readiness -> node -> on_setup."""
         sim_managed = self._setup_simulation()
+
+        # Run declarative readiness checks once per class
+        cls = self.__class__
+        if id(cls) not in SimTestFixture._readiness_completed and sim_managed:
+            has_checks = (
+                cls.READINESS_LIFECYCLE_NODES
+                or cls.READINESS_TOPICS
+                or cls.READINESS_TF_FRAMES
+            )
+            if has_checks:
+                self._run_readiness_checks()
+            SimTestFixture._readiness_completed.add(id(cls))
+
         self._setup_node(skip_domain_randomization=sim_managed)
         try:
             # on_setup runs BEFORE the spin thread starts, so action client
@@ -89,6 +132,108 @@ class SimTestFixture:
 
     def on_teardown(self):
         """Override for custom teardown before node destruction."""
+
+    def on_sim_ready(self):
+        """Override for custom one-time readiness checks.
+
+        Called once per class after all declarative ``READINESS_*`` checks
+        pass.  A temporary ROS node is available as ``self._node`` during
+        this call (it is destroyed afterwards).
+        """
+
+    # -- Readiness gate -----------------------------------------------------
+
+    def _run_readiness_checks(self):
+        """Run declarative readiness checks once per class.
+
+        Creates a bare temporary node (not attached to any executor) so that
+        ``_acquire_managed()`` in the check functions can add it to their own
+        SingleThreadedExecutor for DDS discovery.
+        """
+        import random as _rand
+
+        cls = self.__class__
+
+        if not SimTestFixture._rclpy_initialized:
+            rclpy.init()
+            SimTestFixture._rclpy_initialized = True
+        else:
+            try:
+                if not rclpy.get_default_context().ok():
+                    rclpy.init()
+            except Exception:
+                rclpy.init()
+
+        domain = int(os.environ.get('ROS_DOMAIN_ID', 0))
+        temp_node = rclpy.create_node(
+            f"readiness_{domain}_{_rand.randint(0, 9999):04d}",
+            parameter_overrides=[
+                Parameter('use_sim_time', Parameter.Type.BOOL, True),
+            ],
+        )
+
+        try:
+            # Lifecycle checks
+            if cls.READINESS_LIFECYCLE_NODES:
+                from sim_harness.nav2 import check_lifecycle_node_active
+                for name in cls.READINESS_LIFECYCLE_NODES:
+                    result = check_lifecycle_node_active(
+                        temp_node, name,
+                        timeout_sec=cls.READINESS_TIMEOUT,
+                        max_attempts=cls.READINESS_MAX_ATTEMPTS,
+                    )
+                    if not result.ok:
+                        pytest.skip(
+                            f"Readiness: lifecycle node {name} not active "
+                            f"after {cls.READINESS_MAX_ATTEMPTS} attempts: "
+                            f"{result.details}")
+                print(f"[Readiness] {len(cls.READINESS_LIFECYCLE_NODES)} "
+                      f"lifecycle node(s) active", flush=True)
+
+            # Topic checks
+            if cls.READINESS_TOPICS:
+                from sim_harness.checks import check_sensor_publishing
+                for entry in cls.READINESS_TOPICS:
+                    topic, msg_type, rate_hz = entry
+                    result = check_sensor_publishing(
+                        temp_node, topic,
+                        expected_rate_hz=rate_hz,
+                        msg_type=msg_type,
+                        tolerance_percent=90.0,
+                        sample_duration_sec=5.0,
+                        max_attempts=cls.READINESS_MAX_ATTEMPTS,
+                    )
+                    if not result.ok:
+                        pytest.skip(
+                            f"Readiness: topic {topic} not publishing "
+                            f"after {cls.READINESS_MAX_ATTEMPTS} attempts: "
+                            f"{result.details}")
+                print(f"[Readiness] {len(cls.READINESS_TOPICS)} "
+                      f"topic(s) publishing", flush=True)
+
+            # TF checks
+            if cls.READINESS_TF_FRAMES:
+                from sim_harness.checks import check_transform_available
+                for target, source in cls.READINESS_TF_FRAMES:
+                    ok = check_transform_available(
+                        temp_node, target, source,
+                        timeout_sec=min(cls.READINESS_TIMEOUT, 30.0),
+                    )
+                    if not ok:
+                        pytest.skip(
+                            f"Readiness: TF {target} -> {source} not available")
+                print(f"[Readiness] {len(cls.READINESS_TF_FRAMES)} "
+                      f"TF frame(s) available", flush=True)
+
+            # Custom hook
+            self._node = temp_node
+            try:
+                self.on_sim_ready()
+            finally:
+                self._node = None  # type: ignore[assignment]
+
+        finally:
+            temp_node.destroy_node()
 
     # -- Node lifecycle -----------------------------------------------------
 

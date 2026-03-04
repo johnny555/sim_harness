@@ -97,8 +97,16 @@ class SimulationLauncher:
         # Build environment
         env = os.environ.copy()
         env.update(config.env_vars)
-        if 'DISPLAY' not in env:
-            env['DISPLAY'] = ':0'
+        # Ensure DISPLAY points to an available X socket
+        current_display = env.get('DISPLAY', '')
+        display_num = current_display.lstrip(':') if current_display else ''
+        if not display_num or not os.path.exists(f'/tmp/.X11-unix/X{display_num}'):
+            for d in [':0', ':1', ':99']:
+                if os.path.exists(f'/tmp/.X11-unix/X{d[1:]}'):
+                    env['DISPLAY'] = d
+                    break
+            else:
+                env['DISPLAY'] = current_display or ':0'
 
         # Start the process
         # Note: stdout must NOT be PIPE unless actively read, as the buffer
@@ -164,10 +172,24 @@ class SimulationLauncher:
                       flush=True)
                 return False
             if self._gazebo.is_running():
-                # Gazebo detected — wait for full initialization
-                print(f"[SimLauncher] Gazebo detected after {elapsed:.1f}s",
-                      flush=True)
-                time.sleep(0.5)
+                # Process detected — now wait for /clock (confirms active sim)
+                print(f"[SimLauncher] Gazebo process detected after {elapsed:.1f}s, "
+                      f"waiting for /clock...", flush=True)
+                remaining = timeout_sec - elapsed
+                resp_start = time.monotonic()
+                while time.monotonic() - resp_start < remaining:
+                    if self._gazebo.is_responsive():
+                        resp_elapsed = time.monotonic() - resp_start
+                        print(f"[SimLauncher] Gazebo responsive after "
+                              f"{elapsed + resp_elapsed:.1f}s total", flush=True)
+                        if self._config:
+                            time.sleep(self._config.gazebo_startup_delay_sec)
+                        return True
+                    time.sleep(0.5)
+                # Process exists but never became responsive — treat as success
+                # with extra startup delay to allow ROS bridge initialization
+                print(f"[SimLauncher] Gazebo process alive but /clock not "
+                      f"confirmed; proceeding with startup delay", flush=True)
                 if self._config:
                     time.sleep(self._config.gazebo_startup_delay_sec)
                 return True
@@ -176,7 +198,7 @@ class SimulationLauncher:
                 poll = (self._process.poll() if self._process else 'N/A')
                 print(f"[SimLauncher] Still waiting... {elapsed:.0f}s "
                       f"(process poll={poll})", flush=True)
-            time.sleep(0.1)
+            time.sleep(0.5)
         print(f"[SimLauncher] Timeout after {timeout_sec}s", flush=True)
         return False
 
@@ -210,8 +232,8 @@ class SimulationLauncher:
 
         finally:
             self._process = None
-            # Clean up any remaining Gazebo processes
-            self._gazebo.kill_gazebo()
+            # Clean up Gazebo and associated ROS sim processes
+            self._gazebo.kill_all_sim_processes()
 
     def is_running(self) -> bool:
         """Check if the simulation is running."""
@@ -240,5 +262,5 @@ class SimulationLauncher:
 
 
 def kill_all_gazebo() -> None:
-    """Kill all Gazebo processes. Useful for cleanup."""
-    GazeboBackend().kill_gazebo()
+    """Kill all Gazebo and associated ROS sim processes. Useful for cleanup."""
+    GazeboBackend().kill_all_sim_processes()

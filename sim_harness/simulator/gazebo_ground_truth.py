@@ -1,5 +1,6 @@
 # Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
 
 """
 Gazebo ground truth pose retrieval.

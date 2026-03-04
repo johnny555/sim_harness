@@ -30,6 +30,9 @@ GAZEBO_PROCESS_PATTERNS = [
     "gzclient",
 ]
 
+# ROS processes spawned alongside the simulator that must be cleaned up
+ROS_SIM_PROCESS_PATTERNS = ["parameter_bridge", "robot_state_publisher"]
+
 
 def _find_pids_by_pattern(pattern: str) -> Set[int]:
     """Find process IDs matching a pattern using pgrep."""
@@ -246,6 +249,16 @@ class GazeboBackend(SimulatorInterface):
     def kill_gazebo(self) -> None:
         """Kill all Gazebo processes."""
         for pattern in GAZEBO_PROCESS_PATTERNS:
+            _kill_processes_by_pattern(pattern, signal=9)
+
+    def kill_all_sim_processes(self) -> None:
+        """Kill Gazebo and all associated ROS sim processes.
+
+        Cleans up ``parameter_bridge``, ``robot_state_publisher``, and other
+        orphan processes that ``kill_gazebo()`` alone would leave behind.
+        """
+        self.kill_gazebo()
+        for pattern in ROS_SIM_PROCESS_PATTERNS:
             _kill_processes_by_pattern(pattern, signal=9)
 
     def wait_for_topic(

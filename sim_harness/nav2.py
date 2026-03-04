@@ -177,13 +177,100 @@ def _cleanup_managed(svc_node, client, executor, temp, managed):
 
 def check_lifecycle_node_active(
     node: Node, lifecycle_node_name: str, timeout_sec: float = 30.0,
-    executor=None,
+    executor=None, max_attempts: int = 1,
 ) -> LifecycleResult:
-    """Check that a lifecycle node reaches the Active state."""
+    """Check that a lifecycle node reaches the Active state.
+
+    Args:
+        max_attempts: Number of attempts before returning failure.
+            Default ``1`` preserves backward compatibility.  Each retry
+            creates a fresh temp node via ``_acquire_managed()`` which
+            triggers DDS re-discovery.  Retries use a capped timeout of
+            ``min(timeout_sec, 30.0)`` since the node should already be up.
+    """
+    result = LifecycleResult()
+    for attempt in range(max_attempts):
+        retry_timeout = timeout_sec if attempt == 0 else min(timeout_sec, 30.0)
+        result = check_lifecycle_node_state(
+            node, lifecycle_node_name, LifecycleState.ACTIVE, retry_timeout,
+            executor=executor,
+        )
+        if result.ok:
+            return result
+        if attempt < max_attempts - 1:
+            node.get_logger().debug(
+                f"check_lifecycle_node_active({lifecycle_node_name}) attempt "
+                f"{attempt + 1}/{max_attempts} failed: {result.details}, retrying...")
+    return result
+
+
+def ensure_lifecycle_node_active(
+    node: Node, lifecycle_node_name: str, timeout_sec: float = 30.0,
+    max_attempts: int = 3, executor=None,
+) -> LifecycleResult:
+    """Ensure a lifecycle node reaches Active state, transitioning if needed.
+
+    First checks current state. If not active, sends configure and/or
+    activate transitions. Retries up to max_attempts times.
+    """
+    from lifecycle_msgs.srv import ChangeState
+    from lifecycle_msgs.msg import Transition
+
+    for attempt in range(max_attempts):
+        # Check current state
+        result = check_lifecycle_node_state(
+            node, lifecycle_node_name, LifecycleState.ACTIVE,
+            timeout_sec, executor=executor)
+        if result.ok:
+            return result
+
+        # Try to transition
+        svc_node, exc, temp, managed = _acquire_managed(node, executor)
+        client = None
+        try:
+            change_svc = f"/{lifecycle_node_name}/change_state"
+            client = svc_node.create_client(ChangeState, change_svc)
+            if not client.wait_for_service(timeout_sec=10.0):
+                result.details = f"Service {change_svc} not available"
+                continue
+
+            # Get current state to determine needed transitions
+            get_result = check_lifecycle_node_state(
+                node, lifecycle_node_name, LifecycleState.ACTIVE,
+                5.0, executor=executor)
+
+            state_label = get_result.details.lower() if get_result.details else ""
+
+            transitions = []
+            if "unconfigured" in state_label:
+                transitions = [
+                    Transition.TRANSITION_CONFIGURE,
+                    Transition.TRANSITION_ACTIVATE,
+                ]
+            elif "inactive" in state_label:
+                transitions = [Transition.TRANSITION_ACTIVATE]
+
+            for tid in transitions:
+                req = ChangeState.Request()
+                req.transition = Transition(id=tid)
+                future = client.call_async(req)
+                _spin_once_or_sleep(exc, managed, timeout_sec=3.0)
+                start = time.monotonic()
+                while not future.done() and time.monotonic() - start < 10.0:
+                    _spin_once_or_sleep(exc, managed)
+                time.sleep(2.0)  # Allow state transition to complete
+
+        finally:
+            if client is not None:
+                _cleanup_managed(svc_node, client, exc, temp, managed)
+            elif managed:
+                exc.remove_node(temp)
+                temp.destroy_node()
+
+    # Final check
     return check_lifecycle_node_state(
-        node, lifecycle_node_name, LifecycleState.ACTIVE, timeout_sec,
-        executor=executor,
-    )
+        node, lifecycle_node_name, LifecycleState.ACTIVE,
+        timeout_sec, executor=executor)
 
 
 def check_lifecycle_node_state(
@@ -539,6 +626,10 @@ def check_navigation_action_succeeds(
         while not result_future.done():
             _spin_once_or_sleep(exc, managed)
             if time.monotonic() - t0 > timeout_sec:
+                # Cancel the in-flight goal so Nav2 stops working on it
+                handle.cancel_goal_async()
+                for _ in range(20):
+                    _spin_once_or_sleep(exc, managed)
                 result.details = "Timeout waiting for navigation result"
                 return result
 
@@ -593,6 +684,7 @@ def check_costmap_contains_obstacle(
 
 # -- Backward compatibility aliases (deprecated) ──────────────────────────
 
+assert_ensure_lifecycle_node_active = ensure_lifecycle_node_active
 assert_lifecycle_node_active = check_lifecycle_node_active
 assert_lifecycle_node_state = check_lifecycle_node_state
 assert_lifecycle_nodes_active = check_lifecycle_nodes_active

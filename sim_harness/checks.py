@@ -287,19 +287,36 @@ def check_sensor_publishing(
     node: Node, topic: str, expected_rate_hz: float,
     msg_type=None, tolerance_percent: float = 10.0,
     sample_duration_sec: float = 5.0, executor=None,
+    max_attempts: int = 1,
 ) -> SensorDataResult:
-    """Check that a topic publishes at roughly *expected_rate_hz*."""
+    """Check that a topic publishes at roughly *expected_rate_hz*.
+
+    Args:
+        max_attempts: Number of attempts before returning failure.
+            Default ``1`` preserves backward compatibility.  On retry,
+            a 1 s pause allows DDS discovery to catch up.
+    """
     if msg_type is None:
         from sensor_msgs.msg import LaserScan
         msg_type = LaserScan
-    msgs = _collect(node, topic, msg_type, sample_duration_sec, executor=executor)
-    rate = len(msgs) / sample_duration_sec if sample_duration_sec > 0 else 0
-    tol = expected_rate_hz * tolerance_percent / 100
-    ok = abs(rate - expected_rate_hz) <= tol
-    return SensorDataResult(
-        valid=ok, message_count=len(msgs), publish_rate_hz=rate,
-        details=f"Rate {rate:.1f} Hz (expected {expected_rate_hz:.1f} +/- {tol:.1f})",
-    )
+    result = SensorDataResult()
+    for attempt in range(max_attempts):
+        msgs = _collect(node, topic, msg_type, sample_duration_sec, executor=executor)
+        rate = len(msgs) / sample_duration_sec if sample_duration_sec > 0 else 0
+        tol = expected_rate_hz * tolerance_percent / 100
+        ok = abs(rate - expected_rate_hz) <= tol
+        result = SensorDataResult(
+            valid=ok, message_count=len(msgs), publish_rate_hz=rate,
+            details=f"Rate {rate:.1f} Hz (expected {expected_rate_hz:.1f} +/- {tol:.1f})",
+        )
+        if ok:
+            return result
+        if attempt < max_attempts - 1:
+            node.get_logger().debug(
+                f"check_sensor_publishing({topic}) attempt {attempt + 1}/{max_attempts} "
+                f"failed: {result.details}, retrying...")
+            time.sleep(1.0)
+    return result
 
 
 def check_lidar_valid(
