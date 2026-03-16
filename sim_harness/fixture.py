@@ -35,6 +35,19 @@ from sim_harness.collector import MessageCollector
 from sim_harness.spin import spin_for_duration, spin_until_condition
 
 
+def _ensure_rclpy_init():
+    """Initialize rclpy if not already initialized, handling stale contexts."""
+    if not SimTestFixture._rclpy_initialized:
+        rclpy.init()
+        SimTestFixture._rclpy_initialized = True
+    else:
+        try:
+            if not rclpy.get_default_context().ok():
+                rclpy.init()
+        except Exception:
+            rclpy.init()
+
+
 class SimTestFixture:
     """Base class for ROS 2 simulation integration tests.
 
@@ -150,23 +163,13 @@ class SimTestFixture:
         ``_acquire_managed()`` in the check functions can add it to their own
         SingleThreadedExecutor for DDS discovery.
         """
-        import random as _rand
-
         cls = self.__class__
 
-        if not SimTestFixture._rclpy_initialized:
-            rclpy.init()
-            SimTestFixture._rclpy_initialized = True
-        else:
-            try:
-                if not rclpy.get_default_context().ok():
-                    rclpy.init()
-            except Exception:
-                rclpy.init()
+        _ensure_rclpy_init()
 
         domain = int(os.environ.get('ROS_DOMAIN_ID', 0))
         temp_node = rclpy.create_node(
-            f"readiness_{domain}_{_rand.randint(0, 9999):04d}",
+            f"readiness_{domain}_{random.randint(0, 9999):04d}",
             parameter_overrides=[
                 Parameter('use_sim_time', Parameter.Type.BOOL, True),
             ],
@@ -244,15 +247,7 @@ class SimTestFixture:
             domain = random.randint(100, 199)
             os.environ['ROS_DOMAIN_ID'] = str(domain)
 
-        if not SimTestFixture._rclpy_initialized:
-            rclpy.init()
-            SimTestFixture._rclpy_initialized = True
-        else:
-            try:
-                if not rclpy.get_default_context().ok():
-                    rclpy.init()
-            except Exception:
-                rclpy.init()
+        _ensure_rclpy_init()
 
         self._node = rclpy.create_node(
             f"sim_test_{domain}_{random.randint(0, 9999):04d}",
@@ -441,9 +436,7 @@ SimulationTestFixture = SimTestFixture
 @pytest.fixture
 def ros_node():
     """Pytest fixture providing a plain ROS 2 node."""
-    if not SimTestFixture._rclpy_initialized:
-        rclpy.init()
-        SimTestFixture._rclpy_initialized = True
+    _ensure_rclpy_init()
     d = random.randint(100, 199)
     os.environ['ROS_DOMAIN_ID'] = str(d)
     node = rclpy.create_node(

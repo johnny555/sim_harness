@@ -68,6 +68,7 @@ class SimulationLauncher:
         self._process: Optional[subprocess.Popen] = None
         self._gazebo = GazeboBackend()
         self._config: Optional[LaunchConfig] = None
+        self._log_file = None
 
     def start(
         self,
@@ -130,6 +131,7 @@ class SimulationLauncher:
             print(f"Failed to start simulation: {e}")
             log_file.close()
             return False
+        self._log_file = log_file  # Keep reference for cleanup
 
         if wait_for_ready:
             return self.wait_until_ready(config.startup_timeout_sec)
@@ -232,6 +234,13 @@ class SimulationLauncher:
 
         finally:
             self._process = None
+            # Close log file descriptor
+            if self._log_file:
+                try:
+                    self._log_file.close()
+                except Exception:
+                    pass
+                self._log_file = None
             # Clean up Gazebo and associated ROS sim processes
             self._gazebo.kill_all_sim_processes()
 

@@ -9,6 +9,7 @@ restarting when test configurations differ substantially.
 """
 
 import atexit
+import fcntl
 import hashlib
 import os
 import subprocess
@@ -23,6 +24,54 @@ from sim_harness.simulator.simulation_launcher import (
     LaunchConfig,
 )
 import random
+
+# -- Exclusive file locking ------------------------------------------------
+
+GAZEBO_LOCK_FILE = '/tmp/gazebo_test.lock'
+LOCK_ACQUIRE_TIMEOUT_SECONDS = 300  # 5 minutes
+
+
+def _acquire_gazebo_lock():
+    """Acquire an exclusive file lock to serialise Gazebo test runs.
+
+    Returns:
+        Open file handle (must be kept alive while the lock is held).
+
+    Raises:
+        TimeoutError: If the lock cannot be acquired within the timeout.
+    """
+    print("[lock] Attempting to acquire Gazebo test lock...")
+    lock_file = open(GAZEBO_LOCK_FILE, 'w')
+
+    start = time.monotonic()
+    while True:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            print(f"[lock] Lock acquired (PID: {os.getpid()})")
+            return lock_file
+        except IOError:
+            elapsed = time.monotonic() - start
+            if elapsed > LOCK_ACQUIRE_TIMEOUT_SECONDS:
+                lock_file.close()
+                raise TimeoutError(
+                    f"Failed to acquire Gazebo test lock after "
+                    f"{LOCK_ACQUIRE_TIMEOUT_SECONDS}s. Another test may be stuck."
+                )
+            if int(elapsed) % 10 == 0 and int(elapsed) > 0:
+                print(f"[lock] Waiting for lock... ({int(elapsed)}s)")
+            time.sleep(1)
+
+
+def _release_gazebo_lock(lock_handle) -> None:
+    """Release a previously acquired Gazebo test lock."""
+    if lock_handle is None:
+        return
+    try:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        lock_handle.close()
+        print(f"[lock] Lock released (PID: {os.getpid()})")
+    except Exception as e:
+        print(f"[lock] Warning: Error releasing lock: {e}")
 
 
 def _discover_ros_domain_from_running_nodes() -> Optional[int]:
@@ -165,6 +214,7 @@ class SimulationManager:
         self._isolation_domain_id: Optional[int] = None
         self._started_by_us: bool = False
         self._active_users: int = 0  # Track how many tests are using the sim
+        self._lock_handle = None  # File lock for serialising Gazebo runs
 
     @classmethod
     def get_instance(cls) -> 'SimulationManager':
@@ -221,6 +271,10 @@ class SimulationManager:
             if self._can_reuse(request_hash):
                 self._active_users += 1
                 return True
+
+            # Acquire exclusive file lock before (re)starting
+            if self._lock_handle is None:
+                self._lock_handle = _acquire_gazebo_lock()
 
             # Need to (re)start simulation
             if self._launcher is not None and self._started_by_us:
@@ -411,6 +465,11 @@ class SimulationManager:
         self._current_request = None
         self._current_hash = ""
         self._started_by_us = False
+
+        # Release the file lock so the next test can acquire it
+        if self._lock_handle is not None:
+            _release_gazebo_lock(self._lock_handle)
+            self._lock_handle = None
 
 
 # Convenience function

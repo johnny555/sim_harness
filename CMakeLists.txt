@@ -27,6 +27,13 @@ find_package(lifecycle_msgs REQUIRED)
 find_package(controller_manager_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(robot_localization REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(diagnostic_updater REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 
 set(cpp_dependencies
   rclcpp
@@ -102,6 +109,27 @@ install(TARGETS ${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
+)
+
+# EKF wrapper: starts executor before initialize() to prevent sim-time deadlock
+add_executable(ekf_wrapper_node src/simulator/ekf_wrapper_node.cpp)
+ament_target_dependencies(ekf_wrapper_node
+  rclcpp robot_localization
+  diagnostic_updater diagnostic_msgs std_srvs
+  geometry_msgs nav_msgs sensor_msgs
+  tf2 tf2_ros tf2_geometry_msgs)
+target_include_directories(ekf_wrapper_node PRIVATE ${EIGEN3_INCLUDE_DIRS})
+target_link_libraries(ekf_wrapper_node ${robot_localization_LIBRARIES})
+
+install(TARGETS ekf_wrapper_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# Python bridge nodes for gz_ros2_control + Nav2 integration
+install(PROGRAMS
+  scripts/tf_relay.py
+  scripts/twist_to_twist_stamped.py
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 # Install launch files

@@ -57,9 +57,20 @@ class SimulatorInterface(ABC):
 
     Usage:
         sim = SimulatorInterface.create(SimulatorType.GAZEBO)
+        sim.start(config)
         sim.wait_until_ready(timeout_sec=30)
         # Run tests...
+        sim.stop()
     """
+
+    def __init__(self, config: Optional[SimulatorConfig] = None):
+        """
+        Initialize the simulator interface.
+
+        Args:
+            config: Optional simulator configuration
+        """
+        self._config = config or SimulatorConfig()
 
     @abstractmethod
     def type(self) -> SimulatorType:
@@ -88,12 +99,12 @@ class SimulatorInterface(ABC):
         pass
 
     @abstractmethod
-    def wait_until_ready(self, timeout_sec: float = 30.0) -> bool:
+    def wait_until_ready(self, timeout_sec: Optional[float] = None) -> bool:
         """
         Wait until the simulator is ready for testing.
 
         Args:
-            timeout_sec: Maximum time to wait
+            timeout_sec: Maximum time to wait. If None, uses config value.
 
         Returns:
             True if simulator is ready, False on timeout
@@ -109,13 +120,46 @@ class SimulatorInterface(ABC):
         """
         pass
 
+    @abstractmethod
+    def start(self, config: Optional[SimulatorConfig] = None) -> bool:
+        """
+        Start the simulator.
+
+        Args:
+            config: Optional configuration to override current config
+
+        Returns:
+            True if simulator started successfully, False otherwise
+        """
+        pass
+
+    @abstractmethod
+    def stop(self) -> bool:
+        """
+        Stop the simulator gracefully.
+
+        Returns:
+            True if simulator stopped successfully, False otherwise
+        """
+        pass
+
+    @abstractmethod
+    def shutdown(self) -> None:
+        """
+        Forcefully shutdown the simulator and clean up resources.
+
+        This should be called to ensure all resources are released.
+        """
+        pass
+
     @staticmethod
-    def create(sim_type: SimulatorType) -> 'SimulatorInterface':
+    def create(sim_type: SimulatorType, config: Optional[SimulatorConfig] = None) -> 'SimulatorInterface':
         """
         Factory method to create simulator backend.
 
         Args:
             sim_type: Type of simulator
+            config: Optional simulator configuration
 
         Returns:
             Simulator interface instance
@@ -123,9 +167,9 @@ class SimulatorInterface(ABC):
         from sim_harness.simulator.gazebo_backend import GazeboBackend, NullBackend
 
         if sim_type == SimulatorType.GAZEBO:
-            return GazeboBackend()
+            return GazeboBackend(config)
         elif sim_type == SimulatorType.NONE:
-            return NullBackend()
+            return NullBackend(config)
         else:
             # Not yet implemented - return null backend
-            return NullBackend()
+            return NullBackend(config)

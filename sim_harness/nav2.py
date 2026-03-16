@@ -35,6 +35,7 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.action import ActionClient
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
+from action_msgs.msg import GoalStatus
 from lifecycle_msgs.srv import GetState
 from lifecycle_msgs.msg import State
 from geometry_msgs.msg import PoseStamped
@@ -635,7 +636,7 @@ def check_navigation_action_succeeds(
 
         action_result = result_future.result()
         result.time_taken_sec = time.monotonic() - t0
-        if action_result.status == 4:  # SUCCEEDED
+        if action_result.status == GoalStatus.STATUS_SUCCEEDED:
             result.success = True
             result.final_distance_to_goal = 0.0
             result.details = f"Navigation succeeded in {result.time_taken_sec:.1f}s"

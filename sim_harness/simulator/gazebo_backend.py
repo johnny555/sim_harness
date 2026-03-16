@@ -11,14 +11,23 @@ Provides Gazebo-specific functionality for:
 """
 
 import os
+import signal
 import subprocess
 import time
 from typing import List, Set
 
 from sim_harness.simulator.simulator_interface import (
+    SimulatorConfig,
     SimulatorInterface,
     SimulatorType,
 )
+
+
+# Resolve gz command path once at module load
+_GZ_CMD: str = "gz"
+_gz_vendor = "/opt/ros/jazzy/opt/gz_tools_vendor/bin/gz"
+if os.path.exists(_gz_vendor):
+    _GZ_CMD = _gz_vendor
 
 
 # Patterns to match Gazebo processes
@@ -31,14 +40,30 @@ GAZEBO_PROCESS_PATTERNS = [
 ]
 
 # ROS processes spawned alongside the simulator that must be cleaned up
-ROS_SIM_PROCESS_PATTERNS = ["parameter_bridge", "robot_state_publisher"]
+ROS_SIM_PROCESS_PATTERNS = [
+    "parameter_bridge",
+    "robot_state_publisher",
+    "bt_phase_marker",
+    "vehicle_markers",
+    "lidar_body_filter",
+    "lidar_noise_injector",
+    "ekf_wrapper_node",
+    "twist_to_twist_stamped",
+    "planner_server",
+    "controller_server",
+    "behavior_server",
+    "bt_navigator",
+    "lifecycle_manager",
+]
 
 
-def _find_pids_by_pattern(pattern: str) -> Set[int]:
-    """Find process IDs matching a pattern using pgrep."""
+def _find_pids_by_patterns(patterns: List[str]) -> Set[int]:
+    """Find process IDs matching any of the patterns using a single pgrep call."""
+    # Combine into one regex: "pattern1|pattern2|..."
+    combined = "|".join(patterns)
     try:
         result = subprocess.run(
-            ["pgrep", "-f", pattern],
+            ["pgrep", "-f", combined],
             capture_output=True,
             text=True,
             timeout=5
@@ -49,11 +74,8 @@ def _find_pids_by_pattern(pattern: str) -> Set[int]:
             if line:
                 try:
                     pid = int(line)
-                    # Exclude our own process and parent processes
                     if pid != my_pid and pid != os.getppid():
-                        # Verify this is actually a Gazebo binary, not just a command containing the pattern
-                        if _is_gazebo_process(pid):
-                            pids.add(pid)
+                        pids.add(pid)
                 except ValueError:
                     pass
         return pids
@@ -61,9 +83,22 @@ def _find_pids_by_pattern(pattern: str) -> Set[int]:
         return set()
 
 
+def _find_pids_by_pattern(pattern: str) -> Set[int]:
+    """Find process IDs matching a pattern using pgrep."""
+    return _find_pids_by_patterns([pattern])
+
+
 def _is_gazebo_process(pid: int) -> bool:
     """Check if a PID is actually a Gazebo process (not just a command mentioning gz)."""
     try:
+        # Skip zombie processes — they can't be killed and shouldn't block startup
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("State:"):
+                    if "Z" in line:
+                        return False
+                    break
+
         # Read the process executable
         exe_path = os.readlink(f"/proc/{pid}/exe")
         exe_name = os.path.basename(exe_path)
@@ -94,16 +129,90 @@ def _is_gazebo_process(pid: int) -> bool:
         return False
 
 
-def _kill_processes_by_pattern(pattern: str, signal: int = 9) -> None:
-    """Kill processes matching a pattern."""
+def _is_pid_alive(pid: int) -> bool:
+    """Check if a process is alive using signal 0."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # Exists but we don't have permission
+
+
+def _check_pids_alive(pids: Set[int]) -> Set[int]:
+    """Return the subset of *pids* that are still alive."""
+    return {pid for pid in pids if _is_pid_alive(pid)}
+
+
+def _send_signal_to_pids(
+    pids: Set[int], sig: signal.Signals, signal_name: str
+) -> None:
+    """Send a signal to each PID individually, with logging."""
+    for pid in pids:
+        try:
+            os.kill(pid, sig)
+            print(f"[cleanup] Sent {signal_name} to PID {pid}")
+        except ProcessLookupError:
+            print(f"[cleanup] PID {pid} already dead")
+        except PermissionError:
+            print(f"[cleanup] WARNING: No permission to kill PID {pid}")
+
+
+_GRACEFUL_TIMEOUT_SEC = 15
+_SHUTDOWN_CHECK_INTERVAL_SEC = 1
+_POST_KILL_WAIT_SEC = 2
+
+
+def _wait_for_pids_shutdown(
+    pids: Set[int], timeout: int = _GRACEFUL_TIMEOUT_SEC, tag: str = "cleanup"
+) -> Set[int]:
+    """Wait for PIDs to exit, returning those still alive after *timeout*."""
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        remaining = _check_pids_alive(pids)
+        if not remaining:
+            return set()
+        elapsed = int(time.monotonic() - start)
+        if elapsed > 0 and elapsed % 3 == 0:
+            print(f"[{tag}] Waiting for {len(remaining)} process(es)... "
+                  f"({elapsed}s/{timeout}s) PIDs: {remaining}")
+        time.sleep(_SHUTDOWN_CHECK_INTERVAL_SEC)
+    return _check_pids_alive(pids)
+
+
+def _graceful_kill(pids: Set[int], tag: str = "cleanup") -> None:
+    """SIGTERM → wait → SIGKILL flow for a set of PIDs."""
+    if not pids:
+        return
+    alive = _check_pids_alive(pids)
+    if not alive:
+        return
+    _send_signal_to_pids(alive, signal.SIGTERM, "SIGTERM")
+    remaining = _wait_for_pids_shutdown(alive, _GRACEFUL_TIMEOUT_SEC, tag)
+    if remaining:
+        print(f"[{tag}] {len(remaining)} process(es) did not exit gracefully, "
+              f"sending SIGKILL: {remaining}")
+        _send_signal_to_pids(remaining, signal.SIGKILL, "SIGKILL")
+        time.sleep(_POST_KILL_WAIT_SEC)
+
+
+def _kill_processes_by_patterns(patterns: List[str], sig: int = 9) -> None:
+    """Kill processes matching any of the patterns using a single pkill call."""
+    combined = "|".join(patterns)
     try:
         subprocess.run(
-            ["pkill", f"-{signal}", "-f", pattern],
+            ["pkill", f"-{sig}", "-f", combined],
             capture_output=True,
             timeout=5
         )
     except Exception:
         pass
+
+
+def _kill_processes_by_pattern(pattern: str, sig: int = 9) -> None:
+    """Kill processes matching a pattern."""
+    _kill_processes_by_patterns([pattern], sig)
 
 
 class GazeboBackend(SimulatorInterface):
@@ -115,6 +224,9 @@ class GazeboBackend(SimulatorInterface):
     - Managing GZ_PARTITION for test isolation
     - Waiting for Gazebo to be ready
     """
+
+    def __init__(self, config=None):
+        super().__init__(config)
 
     def type(self) -> SimulatorType:
         return SimulatorType.GAZEBO
@@ -129,7 +241,23 @@ class GazeboBackend(SimulatorInterface):
         """
         return len(self.get_gazebo_pids()) > 0
 
-    def is_responsive(self, timeout_sec: float = 2.0) -> bool:
+    @staticmethod
+    def _list_gz_topics(timeout_sec: float = 5.0) -> List[str]:
+        """List all Gazebo topics using the gz CLI (cached path)."""
+        try:
+            result = subprocess.run(
+                [_GZ_CMD, "topic", "-l"],
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec
+            )
+            if result.returncode != 0:
+                return []
+            return result.stdout.strip().split('\n')
+        except (subprocess.TimeoutExpired, Exception):
+            return []
+
+    def is_responsive(self, timeout_sec: float = 10.0) -> bool:
         """
         Check if Gazebo is actually responsive and simulating.
 
@@ -149,23 +277,8 @@ class GazeboBackend(SimulatorInterface):
         if not self.is_running():
             return False
 
-        # Check if /clock topic is available - this indicates Gazebo is actually
-        # running a simulation, not just zombie processes
-        try:
-            result = subprocess.run(
-                ["gz", "topic", "-l"],
-                capture_output=True,
-                text=True,
-                timeout=timeout_sec
-            )
-            if result.returncode != 0:
-                return False
-
-            topics = result.stdout.strip().split('\n')
-            # Look for clock topic - always present in a running simulation
-            return any('/clock' in topic for topic in topics)
-        except (subprocess.TimeoutExpired, Exception):
-            return False
+        topics = self._list_gz_topics(timeout_sec)
+        return any('/clock' in topic for topic in topics)
 
     def wait_until_ready(self, timeout_sec: float = 30.0) -> bool:
         """
@@ -211,15 +324,11 @@ class GazeboBackend(SimulatorInterface):
         """
         Get PIDs of running Gazebo processes.
 
-        Useful for cleanup and monitoring.
+        Uses a single pgrep call with combined pattern for efficiency.
         """
-        all_pids: Set[int] = set()
-
-        for pattern in GAZEBO_PROCESS_PATTERNS:
-            pids = _find_pids_by_pattern(pattern)
-            all_pids.update(pids)
-
-        return all_pids
+        pids = _find_pids_by_patterns(GAZEBO_PROCESS_PATTERNS)
+        # Filter to actual Gazebo processes (not just commands mentioning gz)
+        return {pid for pid in pids if _is_gazebo_process(pid)}
 
     def is_gazebo_topic_available(self, topic: str) -> bool:
         """
@@ -233,33 +342,52 @@ class GazeboBackend(SimulatorInterface):
         Returns:
             True if topic exists in the topic list
         """
-        try:
-            result = subprocess.run(
-                ["gz", "topic", "-l"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            # Exact line match to avoid false positives from substring matching
-            available_topics = result.stdout.strip().split('\n')
-            return topic in available_topics
-        except Exception:
-            return False
+        return topic in self._list_gz_topics()
 
-    def kill_gazebo(self) -> None:
-        """Kill all Gazebo processes."""
-        for pattern in GAZEBO_PROCESS_PATTERNS:
-            _kill_processes_by_pattern(pattern, signal=9)
+    def start(self, config=None) -> bool:
+        """Start is handled externally by SimulationLauncher."""
+        return True
 
-    def kill_all_sim_processes(self) -> None:
+    def stop(self) -> bool:
+        """Stop Gazebo gracefully."""
+        self.kill_gazebo()
+        return True
+
+    def shutdown(self) -> None:
+        """Forcefully shutdown Gazebo."""
+        self.kill_all_sim_processes()
+
+    def kill_gazebo(self, graceful: bool = True) -> None:
+        """Kill all Gazebo processes.
+
+        Args:
+            graceful: If True, send SIGTERM first and wait before SIGKILL.
+                If False, send SIGKILL immediately (legacy behaviour).
+        """
+        if graceful:
+            pids = self.get_gazebo_pids()
+            _graceful_kill(pids, tag="kill_gazebo")
+        else:
+            _kill_processes_by_patterns(GAZEBO_PROCESS_PATTERNS, sig=9)
+
+    def kill_all_sim_processes(self, graceful: bool = True) -> None:
         """Kill Gazebo and all associated ROS sim processes.
 
         Cleans up ``parameter_bridge``, ``robot_state_publisher``, and other
         orphan processes that ``kill_gazebo()`` alone would leave behind.
+
+        Args:
+            graceful: If True, send SIGTERM first and wait before SIGKILL.
+                If False, send SIGKILL immediately (legacy behaviour).
         """
-        self.kill_gazebo()
-        for pattern in ROS_SIM_PROCESS_PATTERNS:
-            _kill_processes_by_pattern(pattern, signal=9)
+        if graceful:
+            all_patterns = GAZEBO_PROCESS_PATTERNS + ROS_SIM_PROCESS_PATTERNS
+            pids = _find_pids_by_patterns(all_patterns)
+            _graceful_kill(pids, tag="kill_all_sim")
+        else:
+            _kill_processes_by_patterns(
+                GAZEBO_PROCESS_PATTERNS + ROS_SIM_PROCESS_PATTERNS, sig=9
+            )
 
     def wait_for_topic(
         self,
@@ -294,6 +422,9 @@ class NullBackend(SimulatorInterface):
     without an actual simulator.
     """
 
+    def __init__(self, config=None):
+        super().__init__(config)
+
     def type(self) -> SimulatorType:
         return SimulatorType.NONE
 
@@ -308,3 +439,12 @@ class NullBackend(SimulatorInterface):
 
     def get_partition(self) -> str:
         return "null_partition"
+
+    def start(self, config=None) -> bool:
+        return True
+
+    def stop(self) -> bool:
+        return True
+
+    def shutdown(self) -> None:
+        pass

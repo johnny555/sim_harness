@@ -37,6 +37,12 @@
   <depend>nav2_msgs</depend>
   <depend>tf2_ros</depend>
 
+  <!-- EKF wrapper node (sim-time deadlock workaround) -->
+  <depend>robot_localization</depend>
+  <depend>diagnostic_updater</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>std_srvs</depend>
+
   <!-- Launch testing -->
   <depend>launch</depend>
   <depend>launch_ros</depend>

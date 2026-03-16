@@ -62,6 +62,12 @@ from sim_harness.simulator.simulation_launcher import (  # noqa: F401
     kill_all_gazebo,
 )
 
+# -- Launch utilities ──────────────────────────────────────────────────────
+from sim_harness.launch_utils import (  # noqa: F401
+    chain_on_exit,
+    get_gazebo_environment_actions,
+)
+
 # -- Validation / requirements ─────────────────────────────────────────────
 from sim_harness.validation.validation_result import (  # noqa: F401
     ValidationResult,
@@ -139,6 +145,9 @@ __all__ = [
     'SimulationLauncher',
     'LaunchConfig',
     'kill_all_gazebo',
+    # Launch utilities
+    'chain_on_exit',
+    'get_gazebo_environment_actions',
     # Validation
     'ValidationResult',
     'ValidationResultCollector',
