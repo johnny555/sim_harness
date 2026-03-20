@@ -20,7 +20,7 @@ namespace sim_harness
  */
 struct ValidationResult
 {
-  /// Requirement ID (e.g., "REQ-001", "Matt-SYSRQ-52")
+  /// Requirement ID (e.g., "REQ-001", "SIM-SYSRQ_SIM-2")
   std::string requirement_id;
 
   /// Human-readable description of the requirement

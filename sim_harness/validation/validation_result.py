@@ -25,7 +25,7 @@ class ValidationResult:
     """
 
     requirement_id: str
-    """Requirement ID (e.g., "REQ-001", "Matt-SYSRQ-52")."""
+    """Requirement ID (e.g., "REQ-001", "SIM-SYSRQ_SIM-2")."""
 
     description: str
     """Human-readable description of the requirement."""
