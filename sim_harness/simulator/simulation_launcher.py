@@ -129,7 +129,10 @@ class SimulationLauncher:
             )
         except Exception as e:
             print(f"Failed to start simulation: {e}")
-            log_file.close()
+            try:
+                log_file.close()
+            except Exception:
+                pass
             return False
         self._log_file = log_file  # Keep reference for cleanup
 
@@ -219,18 +222,33 @@ class SimulationLauncher:
         # Try graceful shutdown first
         try:
             # Send SIGINT to process group
-            os.killpg(os.getpgid(self._process.pid), signal.SIGINT)
+            try:
+                os.killpg(os.getpgid(self._process.pid), signal.SIGINT)
+            except (ProcessLookupError, OSError) as e:
+                print(f"[SimLauncher] Process group already dead: {e}")
 
             # Wait for process to exit
             try:
                 self._process.wait(timeout=timeout_sec)
             except subprocess.TimeoutExpired:
                 # Force kill if still running
-                os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
+                try:
+                    os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
                 self._process.wait(timeout=5)
 
         except Exception as e:
             print(f"Error stopping simulation: {e}")
+            # Always reap the child to prevent zombie processes
+            try:
+                self._process.kill()
+            except OSError:
+                pass
+            try:
+                self._process.wait(timeout=5)
+            except Exception:
+                pass
 
         finally:
             self._process = None
@@ -238,8 +256,9 @@ class SimulationLauncher:
             if self._log_file:
                 try:
                     self._log_file.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[SimLauncher] Warning: failed to close log "
+                          f"file: {e}")
                 self._log_file = None
             # Clean up Gazebo and associated ROS sim processes
             self._gazebo.kill_all_sim_processes()

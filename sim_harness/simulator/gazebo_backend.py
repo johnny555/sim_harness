@@ -79,7 +79,9 @@ def _find_pids_by_patterns(patterns: List[str]) -> Set[int]:
                 except ValueError:
                     pass
         return pids
-    except Exception:
+    except Exception as e:
+        print(f"[Gazebo] Warning: failed to find PIDs for "
+              f"{patterns}: {e}")
         return set()
 
 
@@ -181,6 +183,27 @@ def _wait_for_pids_shutdown(
     return _check_pids_alive(pids)
 
 
+def _reap_zombies() -> int:
+    """Reap any zombie child processes of the current process.
+
+    Returns the number of zombies reaped.  This prevents zombie accumulation
+    when children are killed but never waited on.
+    """
+    reaped = 0
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+            if pid == 0:
+                break
+            reaped += 1
+        except ChildProcessError:
+            # No child processes at all
+            break
+    if reaped:
+        print(f"[cleanup] Reaped {reaped} zombie process(es)")
+    return reaped
+
+
 def _graceful_kill(pids: Set[int], tag: str = "cleanup") -> None:
     """SIGTERM → wait → SIGKILL flow for a set of PIDs."""
     if not pids:
@@ -195,6 +218,8 @@ def _graceful_kill(pids: Set[int], tag: str = "cleanup") -> None:
               f"sending SIGKILL: {remaining}")
         _send_signal_to_pids(remaining, signal.SIGKILL, "SIGKILL")
         time.sleep(_POST_KILL_WAIT_SEC)
+    # Reap any zombies that are our children
+    _reap_zombies()
 
 
 def _kill_processes_by_patterns(patterns: List[str], sig: int = 9) -> None:
@@ -206,8 +231,9 @@ def _kill_processes_by_patterns(patterns: List[str], sig: int = 9) -> None:
             capture_output=True,
             timeout=5
         )
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[Gazebo] Warning: pkill failed for pattern "
+              f"'{combined}': {e}")
 
 
 def _kill_processes_by_pattern(pattern: str, sig: int = 9) -> None:
@@ -252,9 +278,15 @@ class GazeboBackend(SimulatorInterface):
                 timeout=timeout_sec
             )
             if result.returncode != 0:
+                print(f"[Gazebo] gz topic -l returned exit code "
+                      f"{result.returncode}: {result.stderr.strip()}")
                 return []
             return result.stdout.strip().split('\n')
-        except (subprocess.TimeoutExpired, Exception):
+        except subprocess.TimeoutExpired:
+            print(f"[Gazebo] gz topic -l timed out after {timeout_sec}s")
+            return []
+        except Exception as e:
+            print(f"[Gazebo] Failed to list topics: {e}")
             return []
 
     def is_responsive(self, timeout_sec: float = 10.0) -> bool:
@@ -388,6 +420,7 @@ class GazeboBackend(SimulatorInterface):
             _kill_processes_by_patterns(
                 GAZEBO_PROCESS_PATTERNS + ROS_SIM_PROCESS_PATTERNS, sig=9
             )
+            _reap_zombies()
 
     def wait_for_topic(
         self,

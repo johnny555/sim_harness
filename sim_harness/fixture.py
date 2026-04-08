@@ -270,8 +270,8 @@ class SimTestFixture:
         for gh in handles:
             try:
                 gh.cancel_goal_async()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[SimTestFixture] Warning: failed to cancel goal: {e}")
         if handles:
             time.sleep(0.5)
 
@@ -282,31 +282,33 @@ class SimTestFixture:
             self._spin_thread.join(timeout=2.0)
 
         # Now safe to destroy subscriptions and collectors (wait set is idle)
-        for c in self._collectors.values():
+        for name, c in self._collectors.items():
             try:
                 c.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[SimTestFixture] Warning: failed to destroy collector "
+                      f"'{name}': {e}")
         self._collectors.clear()
 
         # Clean up node
         if hasattr(self, '_executor') and hasattr(self, '_node'):
             try:
                 self._executor.remove_node(self._node)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[SimTestFixture] Warning: failed to remove node from "
+                      f"executor: {e}")
             try:
                 self._node.destroy_node()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[SimTestFixture] Warning: failed to destroy node: {e}")
 
     @classmethod
     def teardown_class(cls):
         if SimTestFixture._rclpy_initialized:
             try:
                 rclpy.shutdown()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[SimTestFixture] Warning: rclpy.shutdown() failed: {e}")
             SimTestFixture._rclpy_initialized = False
 
     # -- Simulation lifecycle (lazy imports) --------------------------------

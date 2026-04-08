@@ -9,6 +9,8 @@ restarting when test configurations differ substantially.
 """
 
 import atexit
+import ctypes
+import ctypes.util
 import fcntl
 import hashlib
 import os
@@ -24,6 +26,93 @@ from sim_harness.simulator.simulation_launcher import (
     LaunchConfig,
 )
 import random
+
+
+# -- Child subreaper -------------------------------------------------------
+# In containers where PID 1 is not a proper init (e.g. `sleep infinity`),
+# orphaned grandchildren get reparented to PID 1, which never calls
+# waitpid() — creating permanent zombies.  Setting PR_SET_CHILD_SUBREAPER
+# makes THIS process the reaper for orphaned descendants, so we can
+# waitpid() them ourselves.
+
+_PR_SET_CHILD_SUBREAPER = 36
+_subreaper_set = False
+
+
+def _enable_child_subreaper() -> bool:
+    """Mark the current process as a child sub-reaper (Linux-only).
+
+    Returns True on success, False if unsupported or failed.
+    """
+    global _subreaper_set
+    if _subreaper_set:
+        return True
+    try:
+        libc_name = ctypes.util.find_library('c')
+        if not libc_name:
+            return False
+        libc = ctypes.CDLL(libc_name, use_errno=True)
+        rc = libc.prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0)
+        if rc == 0:
+            _subreaper_set = True
+            print("[SimManager] Enabled child sub-reaper (orphan zombies "
+                  "will be reaped by this process)", flush=True)
+            return True
+        else:
+            print(f"[SimManager] prctl(PR_SET_CHILD_SUBREAPER) returned {rc}",
+                  flush=True)
+            return False
+    except Exception as e:
+        print(f"[SimManager] Could not set child sub-reaper: {e}", flush=True)
+        return False
+
+
+def _reap_zombies() -> int:
+    """Non-blocking reap of all waitable zombie children.
+
+    Returns the count of reaped processes.
+    """
+    reaped = 0
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+            if pid == 0:
+                break
+            reaped += 1
+        except ChildProcessError:
+            break
+    return reaped
+
+
+class _ZombieReaper:
+    """Background daemon thread that periodically reaps zombie children."""
+
+    def __init__(self, interval: float = 5.0):
+        self._interval = interval
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="zombie-reaper")
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            n = _reap_zombies()
+            if n > 0:
+                print(f"[zombie-reaper] Reaped {n} zombie(s)", flush=True)
+            self._stop_event.wait(self._interval)
+
 
 # -- Exclusive file locking ------------------------------------------------
 
@@ -83,6 +172,7 @@ def _discover_ros_domain_from_running_nodes() -> Optional[int]:
     Returns:
         The domain ID if found, or None.
     """
+    errors = []
     for pattern in ("planner_server", "controller_server", "bt_navigator"):
         try:
             result = subprocess.run(
@@ -99,10 +189,15 @@ def _discover_ros_domain_from_running_nodes() -> Optional[int]:
                     for entry in env_bytes.split(b'\x00'):
                         if entry.startswith(b'ROS_DOMAIN_ID='):
                             return int(entry.split(b'=', 1)[1])
-                except (OSError, ValueError):
+                except (OSError, ValueError) as e:
+                    errors.append(f"pid {pid}: {e}")
                     continue
-        except Exception:
+        except Exception as e:
+            errors.append(f"pgrep {pattern}: {e}")
             continue
+    if errors:
+        print(f"[SimManager] ROS domain discovery failed for all candidates: "
+              f"{'; '.join(errors)}")
     return None
 
 
@@ -216,6 +311,13 @@ class SimulationManager:
         self._active_users: int = 0  # Track how many tests are using the sim
         self._lock_handle = None  # File lock for serialising Gazebo runs
 
+        # Become a child sub-reaper so orphaned grandchildren (Gazebo, Nav2
+        # nodes, bridges, etc.) are reparented to us instead of PID 1.
+        _enable_child_subreaper()
+        # Start a background thread that reaps zombie children every 5s.
+        self._zombie_reaper = _ZombieReaper(interval=5.0)
+        self._zombie_reaper.start()
+
     @classmethod
     def get_instance(cls) -> 'SimulationManager':
         """
@@ -237,6 +339,19 @@ class SimulationManager:
         """Cleanup handler called on program exit."""
         if cls._instance is not None:
             cls._instance.stop(force=True)
+            cls._instance._zombie_reaper.stop()
+            # Final reap pass
+            _reap_zombies()
+            # Clean up ros2_control spawner lock files
+            ros_home = os.environ.get('ROS_HOME', os.path.expanduser('~/.ros'))
+            lock_dir = os.path.join(ros_home, 'locks')
+            if os.path.isdir(lock_dir):
+                import glob
+                for lf in glob.glob(os.path.join(lock_dir, '*.lock')):
+                    try:
+                        os.remove(lf)
+                    except OSError:
+                        pass
 
     def request(
         self,
@@ -308,6 +423,21 @@ class SimulationManager:
                       flush=True)
                 self._gazebo.kill_all_sim_processes()
                 time.sleep(1.0)  # Brief wait for processes to terminate
+
+            # Remove stale ros2_control spawner lock files left by killed processes.
+            # The spawner uses a FileLock at ~/.ros/locks/ and if the process is
+            # killed without releasing it, ALL future spawners block for 100s+.
+            ros_home = os.environ.get('ROS_HOME', os.path.expanduser('~/.ros'))
+            lock_dir = os.path.join(ros_home, 'locks')
+            if os.path.isdir(lock_dir):
+                import glob
+                for lock_file in glob.glob(os.path.join(lock_dir, '*.lock')):
+                    try:
+                        os.remove(lock_file)
+                        print(f"[cleanup] Removed stale lock: {lock_file}",
+                              flush=True)
+                    except OSError:
+                        pass
 
             # Apply test isolation (unique ROS_DOMAIN_ID + GZ_PARTITION)
             self._isolation_domain_id = random.randint(100, 199)

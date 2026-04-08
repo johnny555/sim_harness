@@ -550,7 +550,7 @@ def check_transform_available(
 ) -> bool:
     """Check that a TF transform is available and recent."""
     try:
-        from tf2_ros import Buffer, TransformListener
+        from tf2_ros import Buffer, TransformException, TransformListener
     except ImportError:
         return False
     buf = Buffer()
@@ -569,7 +569,12 @@ def check_transform_available(
                           rclpy.time.Time.from_msg(t.header.stamp).nanoseconds) / 1e6
                 if age_ms <= max_age_ms:
                     return True
-            except Exception:
+            except TransformException:
+                pass
+            except Exception as e:
+                node.get_logger().warning(
+                    f"Unexpected error in TF lookup "
+                    f"{source_frame}->{target_frame}: {e}")
                 pass
         return False
     finally:

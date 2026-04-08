@@ -129,6 +129,7 @@ install(TARGETS ekf_wrapper_node
 install(PROGRAMS
   scripts/tf_relay.py
   scripts/twist_to_twist_stamped.py
+  scripts/gps_map_odom_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

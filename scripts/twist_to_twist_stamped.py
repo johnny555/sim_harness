@@ -59,6 +59,14 @@ class TwistToTwistStampedBridge(Node):
         twist_stamped.header.frame_id = self.frame_id
         twist_stamped.twist = msg
 
+        # Diagnostic: log every 100th message
+        if not hasattr(self, '_n'):
+            self._n = 0
+        self._n += 1
+        if self._n % 100 == 1:
+            self.get_logger().info(
+                f'[{self._n}] linear.x={msg.linear.x:.4f} angular.z={msg.angular.z:.4f}')
+
         self.twist_stamped_pub.publish(twist_stamped)
 
 

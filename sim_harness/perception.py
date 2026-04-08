@@ -239,8 +239,11 @@ def check_region_clear(
     try:
         from rclpy.qos import qos_profile_sensor_data
         sub = node.create_subscription(Any, detection_topic, cb, qos_profile_sensor_data)
-    except Exception:
-        return True
+    except Exception as e:
+        node.get_logger().error(
+            f"check_region_clear: failed to subscribe to {detection_topic}: {e}. "
+            "Returning NOT clear (fail-safe).")
+        return False
 
     with _managed_executor(node, executor) as (exc, managed):
         try:

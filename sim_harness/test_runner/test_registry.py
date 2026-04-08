@@ -138,8 +138,9 @@ class TestRegistry:
                         match = re.search(r'<name>([^<]+)</name>', content)
                         if match:
                             return match.group(1)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[TestRegistry] Warning: failed to read "
+                          f"package.xml at {parent}: {e}")
                 # Fallback to directory name
                 return parent.name
         return None
@@ -198,7 +199,9 @@ class TestRegistry:
                 markers=markers,
             )
 
-        except Exception:
+        except Exception as e:
+            print(f"[TestRegistry] Warning: failed to parse test info "
+                  f"from {file_path}: {e}")
             return TestInfo(
                 name=file_path.stem,
                 path=file_path,
