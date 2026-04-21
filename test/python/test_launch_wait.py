@@ -146,6 +146,52 @@ def test_rejects_invalid_arguments():
             condition=lambda: True, actions=[], poll_rate_hz=0)
 
 
+def test_topic_publishing_zero_rate_fires_on_first_message(monkeypatch):
+    """With ``min_rate_hz=0`` the check should return True after one sample."""
+    from sim_harness import launch_wait
+
+    class _FakeSub:
+        pass
+
+    class _FakeNode:
+        def create_subscription(self, msg_cls, topic, callback, depth):
+            _FakeNode.captured_callback = callback
+            return _FakeSub()
+
+    fake_node = _FakeNode()
+    monkeypatch.setattr(launch_wait, '_get_probe_node', lambda: fake_node)
+
+    check = launch_wait.topic_publishing(
+        '/some_topic', msg_type=object, min_rate_hz=0)
+
+    # First call subscribes and returns False (no messages yet)
+    assert check() is False
+
+    # Deliver exactly one message; with min_rate_hz=0 that's enough
+    _FakeNode.captured_callback(object())
+    assert check() is True
+
+
+def test_topic_publishing_positive_rate_requires_two_messages(monkeypatch):
+    """With a positive min_rate_hz, one message is not enough."""
+    from sim_harness import launch_wait
+
+    class _FakeNode:
+        def create_subscription(self, msg_cls, topic, callback, depth):
+            _FakeNode.captured_callback = callback
+            return object()
+
+    fake_node = _FakeNode()
+    monkeypatch.setattr(launch_wait, '_get_probe_node', lambda: fake_node)
+
+    check = launch_wait.topic_publishing(
+        '/some_topic', msg_type=object, min_rate_hz=1.0)
+    assert check() is False
+
+    _FakeNode.captured_callback(object())
+    assert check() is False  # only one sample, still insufficient
+
+
 def test_execute_returns_event_handler(ctx):
     from launch.actions import RegisterEventHandler
 

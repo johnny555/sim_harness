@@ -279,6 +279,7 @@ def topic_publishing(
         Message class, or a string like ``'rosgraph_msgs/msg/Clock'``.
     min_rate_hz : float, default 1.0
         Required minimum rate in Hz, measured over the rolling sample window.
+        Pass ``0`` (or any non-positive value) to fire on the first message.
     sample_window_sec : float, default 2.0
         How long a window (seconds) the rate is averaged over.
     """
@@ -309,6 +310,8 @@ def topic_publishing(
                     msg_cls, topic, callback, 10)
                 return False
             ts = list(state['timestamps'])
+        if min_rate_hz <= 0:
+            return len(ts) >= 1
         if len(ts) < 2:
             return False
         span = ts[-1] - ts[0]
