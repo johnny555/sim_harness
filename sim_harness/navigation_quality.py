@@ -8,6 +8,7 @@ during NavigateToPose maneuvers. Not tied to any specific vehicle or BT.
 import math
 import time
 from dataclasses import dataclass, field
+from typing import Callable, Iterable, Mapping, Optional, Union
 
 
 @dataclass
@@ -151,3 +152,138 @@ class NavigationQualityTracker:
             if cross_tracks[i] * cross_tracks[i-1] < 0)
         max_amplitude = max(abs(ct) for ct in cross_tracks) if cross_tracks else 0.0
         return sign_changes, max_amplitude
+
+
+PhaseMapper = Union[Mapping[str, str], Callable[[str], Optional[str]]]
+CollisionSources = Union[
+    Mapping[str, str],                 # {label: topic}
+    Iterable[str],                     # [topic, ...] (label derived from topic)
+    Iterable[tuple],                   # [(label, topic), ...]
+]
+
+
+def monitor_phases_from_bt_log(
+    node,
+    topic: str,
+    phase_mapper: PhaseMapper,
+    *,
+    phases_seen: Optional[set] = None,
+    on_phase: Optional[Callable[[str, object], None]] = None,
+    qos: int = 10,
+):
+    """Subscribe to a ``nav2_msgs/BehaviorTreeLog`` topic and report phase transitions.
+
+    Args:
+        node: ROS2 node to create the subscription on.
+        topic: BT log topic (e.g. ``'/robot/behavior_tree_log'``).
+        phase_mapper: Either a dict mapping BT node name to phase label,
+            or a callable ``(node_name) -> Optional[str]`` (return ``None`` to skip).
+        phases_seen: Optional set populated with newly observed phase labels.
+        on_phase: Optional callback invoked as ``on_phase(phase_label, event)``
+            the first time each phase label is seen.
+        qos: Subscription QoS depth (default 10).
+
+    Returns:
+        The subscription (keep a reference to prevent GC).
+    """
+    from nav2_msgs.msg import BehaviorTreeLog
+
+    if callable(phase_mapper):
+        lookup = phase_mapper
+    else:
+        mapping = dict(phase_mapper)
+        lookup = mapping.get
+
+    seen = phases_seen if phases_seen is not None else set()
+
+    def bt_log_cb(msg):
+        for event in msg.event_log:
+            phase = lookup(event.node_name)
+            if phase is None:
+                continue
+            if phase not in seen:
+                seen.add(phase)
+                if on_phase is not None:
+                    on_phase(phase, event)
+
+    return node.create_subscription(BehaviorTreeLog, topic, bt_log_cb, qos)
+
+
+def _normalize_collision_sources(sources: CollisionSources):
+    """Normalize to a list of (label, topic) pairs."""
+    if isinstance(sources, Mapping):
+        return list(sources.items())
+    items = []
+    for s in sources:
+        if isinstance(s, str):
+            label = s.strip('/').split('/')[-1]
+            for suffix in ('_contacts', '_contact'):
+                if label.endswith(suffix):
+                    label = label[: -len(suffix)]
+                    break
+            items.append((label or s, s))
+        else:
+            items.append(tuple(s))
+    return items
+
+
+def monitor_collisions(
+    node,
+    sources: CollisionSources,
+    *,
+    tracker: Optional[NavigationQualityTracker] = None,
+    on_collision: Optional[Callable[[str, str, str], None]] = None,
+    ignore_substrings: Iterable[str] = ('ground',),
+    qos: int = 10,
+):
+    """Subscribe to ``ros_gz_interfaces/Contacts`` topics and record collisions.
+
+    Args:
+        node: ROS2 node to create subscriptions on.
+        sources: Either a dict ``{label: topic}``, a list of topic names,
+            or a list of ``(label, topic)`` pairs. When given plain topic
+            names, the label is derived from the final path component with
+            any trailing ``_contacts`` / ``_contact`` suffix stripped.
+        tracker: Optional :class:`NavigationQualityTracker` — new collisions
+            are recorded via ``tracker.add_collision``.
+        on_collision: Optional callback ``(label, body1, body2)``.
+        ignore_substrings: Collision names containing any of these substrings
+            (case-insensitive) are skipped. Default filters ``ground`` noise.
+        qos: Subscription QoS depth (default 10).
+
+    Returns:
+        List of subscriptions (keep references to prevent GC). Sources that
+        fail to subscribe are logged via the node's logger and omitted.
+    """
+    from ros_gz_interfaces.msg import Contacts
+
+    items = _normalize_collision_sources(sources)
+    ignore = tuple(sub.lower() for sub in ignore_substrings)
+
+    def make_cb(label):
+        def cb(msg):
+            for c in msg.contacts:
+                n1 = c.collision1.name
+                n2 = c.collision2.name
+                lower1, lower2 = n1.lower(), n2.lower()
+                if any(sub in lower1 or sub in lower2 for sub in ignore):
+                    continue
+                if tracker is not None:
+                    tracker.add_collision(label, n1, n2)
+                if on_collision is not None:
+                    on_collision(label, n1, n2)
+        return cb
+
+    subs = []
+    for label, topic in items:
+        try:
+            subs.append(node.create_subscription(
+                Contacts, topic, make_cb(label), qos))
+        except Exception as e:
+            logger = node.get_logger() if hasattr(node, 'get_logger') else None
+            if logger is not None:
+                logger.warning(f"Failed to subscribe to {topic}: {e}")
+            else:
+                print(f"Warning: Failed to subscribe to {topic}: {e}",
+                      flush=True)
+    return subs

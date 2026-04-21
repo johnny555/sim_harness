@@ -14,6 +14,7 @@ from typing import Optional
 from sim_harness.validation.validation_result import (
     ValidationResult,
     ValidationResultCollector,
+    ValidationScope,
 )
 
 
@@ -34,7 +35,22 @@ class RequirementValidator:
                     result.details,
                     "Sensors"
                 )
+
+    By default results are recorded in the thread-local
+    ``ValidationResultCollector``. To route a fixture's results into a
+    private :class:`ValidationScope` instead (e.g. for per-run reporting
+    or parallel test isolation), set ``_validation_scope`` as a class or
+    instance attribute, or call :meth:`set_validation_scope`.
     """
+
+    _validation_scope: Optional[ValidationScope] = None
+
+    def set_validation_scope(self, scope: Optional[ValidationScope]) -> None:
+        """Bind this fixture to a specific ``ValidationScope``.
+
+        Pass ``None`` to revert to the thread-local collector.
+        """
+        self._validation_scope = scope
 
     def validate_requirement(
         self,
@@ -77,8 +93,13 @@ class RequirementValidator:
             test_method=test_method
         )
 
-        # Add to collector
-        ValidationResultCollector.instance().add_result(result)
+        # Record into the bound scope if one was set, otherwise the
+        # thread-local collector.
+        scope = getattr(self, '_validation_scope', None)
+        if scope is not None:
+            scope.add(result)
+        else:
+            ValidationResultCollector.instance().add_result(result)
 
         # Print status
         status = "\033[92m[PASS]\033[0m" if passed else "\033[91m[FAIL]\033[0m"
