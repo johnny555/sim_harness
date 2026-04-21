@@ -7,6 +7,7 @@ Reusable launch utilities for ROS 2 + Gazebo simulation launch files.
 Provides:
 - ``chain_on_exit(*actions)`` -- sequential process chaining
 - ``get_gazebo_environment_actions(package_name)`` -- Gazebo env var setup
+- ``WaitForCondition`` + factories -- predicate-based launch gating
 """
 
 import os
@@ -14,6 +15,13 @@ import os
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch.actions import RegisterEventHandler, SetEnvironmentVariable
 from launch.event_handlers import OnProcessExit
+
+from sim_harness.launch_wait import (  # noqa: F401
+    WaitForCondition,
+    lifecycle_active,
+    service_available,
+    topic_publishing,
+)
 
 
 def chain_on_exit(*actions):

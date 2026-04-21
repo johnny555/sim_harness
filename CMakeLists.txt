@@ -188,6 +188,7 @@ if(BUILD_TESTING)
   # ----- Python Unit Tests -----
   ament_add_pytest_test(test_validation_result_py test/python/test_validation_result.py)
   ament_add_pytest_test(test_message_collector_py test/python/test_message_collector.py)
+  ament_add_pytest_test(test_launch_wait_py test/python/test_launch_wait.py)
 
 
   # ----- Integration Tests (launch_testing) -----

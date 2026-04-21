@@ -110,6 +110,47 @@ The mapper accepts a `dict` *or* a callable `(bt_node_name) -> phase_label
 or None`. Collision sources accept a dict, a list of topic names, or a
 list of `(label, topic)` pairs.
 
+### Predicate-based launch gating
+
+Launch files often use `TimerAction(period=N)` to wait for Gazebo, lifecycle
+nodes, or service registration. Fixed delays are brittle across machines —
+a headless CI box needs 10 s where a laptop loading Sellafield needs 120 s.
+`WaitForCondition` polls a real predicate and advances as soon as it's
+true:
+
+```python
+from launch.actions import OpaqueFunction
+from sim_harness.launch_utils import (
+    WaitForCondition, topic_publishing, lifecycle_active,
+)
+
+# Gate Nav2 startup on /clock actually publishing (not a fixed 10–120 s timer).
+wait_for_clock = WaitForCondition(
+    condition=topic_publishing(
+        '/clock', 'rosgraph_msgs/msg/Clock', min_rate_hz=5.0),
+    actions=[OpaqueFunction(function=launch_nav2_setup)],
+    timeout=300.0,
+    description='Wait for /clock',
+)
+
+# Gate lifecycle manager on bt_navigator reaching 'active'.
+wait_for_bt = WaitForCondition(
+    condition=lifecycle_active('/robot/bt_navigator'),
+    actions=[lifecycle_manager_navigation],
+    timeout=60.0,
+    on_timeout='fail',  # shut down the launch if it never activates
+    description='Wait for bt_navigator active',
+)
+```
+
+Factories returning ready-to-use condition callables:
+
+- `topic_publishing(topic, msg_type, min_rate_hz, sample_window_sec)`
+- `service_available(service_name)`
+- `lifecycle_active(node_name)`
+
+Any `Callable[[], bool]` works — roll your own if none of the factories fit.
+
 ### Custom simulator backends
 
 `SimulatorInterface` is abstract. `GazeboBackend` and `NullBackend` ship

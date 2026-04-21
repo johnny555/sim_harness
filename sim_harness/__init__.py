@@ -66,6 +66,10 @@ from sim_harness.simulator.simulation_launcher import (  # noqa: F401
 from sim_harness.launch_utils import (  # noqa: F401
     chain_on_exit,
     get_gazebo_environment_actions,
+    WaitForCondition,
+    lifecycle_active,
+    service_available,
+    topic_publishing,
 )
 
 # -- Validation / requirements ─────────────────────────────────────────────
@@ -148,6 +152,10 @@ __all__ = [
     # Launch utilities
     'chain_on_exit',
     'get_gazebo_environment_actions',
+    'WaitForCondition',
+    'lifecycle_active',
+    'service_available',
+    'topic_publishing',
     # Validation
     'ValidationResult',
     'ValidationResultCollector',
