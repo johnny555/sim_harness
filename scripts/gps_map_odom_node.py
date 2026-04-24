@@ -26,7 +26,7 @@ class GpsMapOdomNode(Node):
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('publish_rate', 10.0)
-        self.declare_parameter('settle_threshold', 0.02)
+        self.declare_parameter('settle_threshold', 0.05)
         self.declare_parameter('settle_count', 20)
         from rcl_interfaces.msg import ParameterDescriptor
         float_desc = ParameterDescriptor(dynamic_typing=True)
