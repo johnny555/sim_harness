@@ -58,8 +58,10 @@ class GpsMapOdomNode(Node):
         sx = self.get_parameter('spawn_x').value
         sy = self.get_parameter('spawn_y').value
         syaw = self.get_parameter('spawn_yaw').value
-        self.smooth_tx = float(sx)
-        self.smooth_ty = float(sy)
+        # Yaw IS smoothed via EMA (see _publish_tf); tx/ty are re-derived each
+        # tick from raw GPS and current yaw, so keep them un-prefixed.
+        self.tx = float(sx)
+        self.ty = float(sy)
         self.smooth_yaw = float(syaw)
 
         # Subscribe to /clock for sim time stamps (node uses wall clock internally)
@@ -121,18 +123,18 @@ class GpsMapOdomNode(Node):
 
         cos_yd = math.cos(self.smooth_yaw)
         sin_yd = math.sin(self.smooth_yaw)
-        raw_tx = self.gps_x - (cos_yd * odom_x - sin_yd * odom_y)
-        raw_ty = self.gps_y - (sin_yd * odom_x + cos_yd * odom_y)
-        jump = math.hypot(raw_tx - self.smooth_tx, raw_ty - self.smooth_ty)
+        new_tx = self.gps_x - (cos_yd * odom_x - sin_yd * odom_y)
+        new_ty = self.gps_y - (sin_yd * odom_x + cos_yd * odom_y)
+        jump = math.hypot(new_tx - self.tx, new_ty - self.ty)
 
-        self.smooth_tx = raw_tx
-        self.smooth_ty = raw_ty
+        self.tx = new_tx
+        self.ty = new_ty
 
         if self.log_count % 50 == 0:
             self.get_logger().info(
                 f'odom=({odom_x:.2f},{odom_y:.2f}) '
                 f'gps=({self.gps_x:.2f},{self.gps_y:.2f}) '
-                f'correction=({self.smooth_tx:.2f},{self.smooth_ty:.2f}) '
+                f'correction=({self.tx:.2f},{self.ty:.2f}) '
                 f'jump={jump:.3f}m')
 
         if not self.settled:
@@ -143,10 +145,10 @@ class GpsMapOdomNode(Node):
             if self.stable_count >= self.settle_count_needed:
                 self.settled = True
                 self.get_logger().info(
-                    f'GPS settled: correction=({self.smooth_tx:.3f}, {self.smooth_ty:.3f})')
+                    f'GPS settled: correction=({self.tx:.3f}, {self.ty:.3f})')
                 self.settled_pub.publish(Bool(data=True))
 
-        self._broadcast(self.smooth_tx, self.smooth_ty, self.smooth_yaw)
+        self._broadcast(self.tx, self.ty, self.smooth_yaw)
 
     def _broadcast(self, tx, ty, yaw):
         t = TransformStamped()
