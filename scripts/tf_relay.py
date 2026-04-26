@@ -3,13 +3,12 @@
 """
 TF Relay Node.
 
-Relays TF transforms from a namespaced topic to the global /tf topic. This is
-necessary when using gz_ros2_control with a namespace, which causes the steering
-controller to publish odometry TF to a namespaced topic (e.g.
-/{ns}/steering_controller/tf_odometry) instead of global /tf.
+Relays TF messages from one topic to another. Useful when a controller (e.g.
+gz_ros2_control with a namespace) publishes odometry TF to a namespaced topic
+instead of the global /tf.
 
 Parameters:
-    source_topic (str): Topic to subscribe to (default: /yt220_01/steering_controller/tf_odometry)
+    source_topic (str): Topic to subscribe to (required — no default)
     target_topic (str): Topic to publish to (default: /tf)
 """
 
@@ -22,13 +21,19 @@ class TFRelay(Node):
     def __init__(self):
         super().__init__('tf_relay')
 
-        # Declare parameters
-        self.declare_parameter('source_topic', '/yt220_01/steering_controller/tf_odometry')
+        # Declare parameters. source_topic has no meaningful default — the
+        # caller must pass one via ros2 launch / --ros-args -p ...
+        self.declare_parameter('source_topic', '')
         self.declare_parameter('target_topic', '/tf')
 
         # Get parameters
         source_topic = self.get_parameter('source_topic').get_parameter_value().string_value
         target_topic = self.get_parameter('target_topic').get_parameter_value().string_value
+        if not source_topic:
+            raise ValueError(
+                "tf_relay: 'source_topic' parameter is required "
+                "(e.g. -p source_topic:=/<ns>/steering_controller/tf_odometry)"
+            )
 
         # Create subscriber and publisher
         self.subscription = self.create_subscription(

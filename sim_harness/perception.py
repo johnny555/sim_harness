@@ -21,13 +21,13 @@ Example::
 
 import math
 import time
-from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
-import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point
+
+from sim_harness.spin import ExecutorContext
 
 
 @dataclass
@@ -44,34 +44,6 @@ class DetectionResult:
 
 def _dist3(p1: Point, p2: Point) -> float:
     return math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2 + (p1.z - p2.z) ** 2)
-
-
-@contextmanager
-def _managed_executor(node: Node, executor=None):
-    """Yield an executor that can process callbacks for *node*.
-
-    When *executor* is provided, assumes it is already spinning in the
-    background and yields it directly.  When None, tries to create a
-    managed SingleThreadedExecutor.  If the node is already in another
-    executor (fixture scenario), yields None and the caller should use
-    sleep-based waiting.
-    """
-    if executor is not None:
-        yield executor, False
-        return
-
-    exc = rclpy.executors.SingleThreadedExecutor()
-    try:
-        exc.add_node(node)
-    except RuntimeError:
-        # Node already in an executor — sleep-based waiting
-        yield None, False
-        return
-
-    try:
-        yield exc, True
-    finally:
-        exc.remove_node(node)
 
 
 # -- Check functions ──────────────────────────────────────────────────────
@@ -97,14 +69,11 @@ def check_object_detected(
         result.details = f"Failed to subscribe to {detection_topic}: {e}"
         return result
 
-    with _managed_executor(node, executor) as (exc, managed):
+    with ExecutorContext(node, executor) as ec:
         try:
             t0 = time.monotonic()
             while time.monotonic() - t0 < timeout_sec:
-                if managed:
-                    exc.spin_once(timeout_sec=0.1)
-                else:
-                    time.sleep(0.1)
+                ec.spin_once(timeout_sec=0.1)
                 for pos in positions:
                     d = _dist3(pos, expected_position)
                     if d <= search_radius:
@@ -146,14 +115,11 @@ def check_object_detected_by_class(
         result.details = f"Failed to subscribe to {detection_topic}: {e}"
         return result
 
-    with _managed_executor(node, executor) as (exc, managed):
+    with ExecutorContext(node, executor) as ec:
         try:
             t0 = time.monotonic()
             while time.monotonic() - t0 < timeout_sec:
-                if managed:
-                    exc.spin_once(timeout_sec=0.1)
-                else:
-                    time.sleep(0.1)
+                ec.spin_once(timeout_sec=0.1)
                 for cls_name, conf, pos in detections:
                     if cls_name.lower() == object_class.lower() and conf >= min_confidence:
                         result.detected = True
@@ -198,14 +164,11 @@ def check_min_objects_detected(
         result.details = f"Failed to subscribe to {detection_topic}: {e}"
         return result
 
-    with _managed_executor(node, executor) as (exc, managed):
+    with ExecutorContext(node, executor) as ec:
         try:
             t0 = time.monotonic()
             while time.monotonic() - t0 < timeout_sec:
-                if managed:
-                    exc.spin_once(timeout_sec=0.1)
-                else:
-                    time.sleep(0.1)
+                ec.spin_once(timeout_sec=0.1)
                 if max_seen[0] >= min_count:
                     result.detected = True
                     result.detection_count = max_seen[0]
@@ -245,14 +208,11 @@ def check_region_clear(
             "Returning NOT clear (fail-safe).")
         return False
 
-    with _managed_executor(node, executor) as (exc, managed):
+    with ExecutorContext(node, executor) as ec:
         try:
             t0 = time.monotonic()
             while time.monotonic() - t0 < observation_period_sec:
-                if managed:
-                    exc.spin_once(timeout_sec=0.1)
-                else:
-                    time.sleep(0.1)
+                ec.spin_once(timeout_sec=0.1)
                 if found[0]:
                     break
         finally:

@@ -31,7 +31,6 @@ from typing import List, Optional, Tuple
 
 import rclpy
 from rclpy.node import Node
-from rclpy.executors import SingleThreadedExecutor
 from rclpy.action import ActionClient
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
@@ -43,6 +42,7 @@ from nav_msgs.msg import Odometry, OccupancyGrid
 from nav2_msgs.action import NavigateToPose
 
 from sim_harness.spin import (
+    ExecutorContext,
     spin_for_duration,
     wait_for_duration, wait_until_condition,
 )
@@ -123,11 +123,6 @@ def _dist2(a: Tuple[float, float], b: Tuple[float, float]) -> float:
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
 
 
-def _temp_node(prefix: str):
-    """Create a throwaway node with unique name."""
-    return rclpy.create_node(f"{prefix}_{int(time.time() * 1000) % 10000}")
-
-
 def _point_to_segment_distance(
     pt: Tuple[float, float], s: Tuple[float, float], e: Tuple[float, float],
 ) -> float:
@@ -136,41 +131,6 @@ def _point_to_segment_distance(
         return _dist2(pt, s)
     t = max(0, min(1, ((pt[0] - s[0]) * dx + (pt[1] - s[1]) * dy) / (dx * dx + dy * dy)))
     return _dist2(pt, (s[0] + t * dx, s[1] + t * dy))
-
-
-def _acquire_managed(node, executor):
-    """Set up managed or non-managed executor for nav2 check functions.
-
-    In managed mode, creates a temporary node and SingleThreadedExecutor.
-    In non-managed mode (executor provided or node already in an executor),
-    uses the caller's node directly and sleep-based waiting.
-
-    Returns (svc_node, executor, temp_node_or_None, managed: bool).
-    """
-    if executor is not None:
-        return node, executor, None, False
-
-    # Managed mode: create temp node + executor
-    temp = _temp_node("nav2_checker")
-    exc = SingleThreadedExecutor()
-    exc.add_node(temp)
-    return temp, exc, temp, True
-
-
-def _spin_once_or_sleep(executor, managed, timeout_sec=0.1):
-    """Spin once if managed, otherwise sleep."""
-    if managed:
-        executor.spin_once(timeout_sec=timeout_sec)
-    else:
-        time.sleep(timeout_sec)
-
-
-def _cleanup_managed(svc_node, client, executor, temp, managed):
-    """Clean up resources from _acquire_managed."""
-    svc_node.destroy_client(client)
-    if managed:
-        executor.remove_node(temp)
-        temp.destroy_node()
 
 
 # -- Lifecycle checks ─────────────────────────────────────────────────────
@@ -185,9 +145,9 @@ def check_lifecycle_node_active(
     Args:
         max_attempts: Number of attempts before returning failure.
             Default ``1`` preserves backward compatibility.  Each retry
-            creates a fresh temp node via ``_acquire_managed()`` which
-            triggers DDS re-discovery.  Retries use a capped timeout of
-            ``min(timeout_sec, 30.0)`` since the node should already be up.
+            spins up a fresh temp service node (via ``ExecutorContext``)
+            which triggers DDS re-discovery.  Retries use a capped timeout
+            of ``min(timeout_sec, 30.0)`` since the node should already be up.
     """
     result = LifecycleResult()
     for attempt in range(max_attempts):
@@ -226,47 +186,44 @@ def ensure_lifecycle_node_active(
             return result
 
         # Try to transition
-        svc_node, exc, temp, managed = _acquire_managed(node, executor)
-        client = None
-        try:
-            change_svc = f"/{lifecycle_node_name}/change_state"
-            client = svc_node.create_client(ChangeState, change_svc)
-            if not client.wait_for_service(timeout_sec=10.0):
-                result.details = f"Service {change_svc} not available"
-                continue
+        with ExecutorContext(node, executor, service_node_prefix='nav2_checker') as ec:
+            client = None
+            try:
+                change_svc = f"/{lifecycle_node_name}/change_state"
+                client = ec.service_node.create_client(ChangeState, change_svc)
+                if not client.wait_for_service(timeout_sec=10.0):
+                    result.details = f"Service {change_svc} not available"
+                    continue
 
-            # Get current state to determine needed transitions
-            get_result = check_lifecycle_node_state(
-                node, lifecycle_node_name, LifecycleState.ACTIVE,
-                5.0, executor=executor)
+                # Get current state to determine needed transitions
+                get_result = check_lifecycle_node_state(
+                    node, lifecycle_node_name, LifecycleState.ACTIVE,
+                    5.0, executor=executor)
 
-            state_label = get_result.details.lower() if get_result.details else ""
+                state_label = get_result.details.lower() if get_result.details else ""
 
-            transitions = []
-            if "unconfigured" in state_label:
-                transitions = [
-                    Transition.TRANSITION_CONFIGURE,
-                    Transition.TRANSITION_ACTIVATE,
-                ]
-            elif "inactive" in state_label:
-                transitions = [Transition.TRANSITION_ACTIVATE]
+                transitions = []
+                if "unconfigured" in state_label:
+                    transitions = [
+                        Transition.TRANSITION_CONFIGURE,
+                        Transition.TRANSITION_ACTIVATE,
+                    ]
+                elif "inactive" in state_label:
+                    transitions = [Transition.TRANSITION_ACTIVATE]
 
-            for tid in transitions:
-                req = ChangeState.Request()
-                req.transition = Transition(id=tid)
-                future = client.call_async(req)
-                _spin_once_or_sleep(exc, managed, timeout_sec=3.0)
-                start = time.monotonic()
-                while not future.done() and time.monotonic() - start < 10.0:
-                    _spin_once_or_sleep(exc, managed)
-                time.sleep(2.0)  # Allow state transition to complete
+                for tid in transitions:
+                    req = ChangeState.Request()
+                    req.transition = Transition(id=tid)
+                    future = client.call_async(req)
+                    ec.spin_once(timeout_sec=3.0)
+                    start = time.monotonic()
+                    while not future.done() and time.monotonic() - start < 10.0:
+                        ec.spin_once()
+                    time.sleep(2.0)  # Allow state transition to complete
 
-        finally:
-            if client is not None:
-                _cleanup_managed(svc_node, client, exc, temp, managed)
-            elif managed:
-                exc.remove_node(temp)
-                temp.destroy_node()
+            finally:
+                if client is not None:
+                    ec.service_node.destroy_client(client)
 
     # Final check
     return check_lifecycle_node_state(
@@ -280,42 +237,40 @@ def check_lifecycle_node_state(
     executor=None,
 ) -> LifecycleResult:
     """Check that a lifecycle node is in a specific state."""
-    svc_node, exc, temp, managed = _acquire_managed(node, executor)
-
-    service_name = f"/{lifecycle_node_name}/get_state"
-    client = svc_node.create_client(GetState, service_name)
     result = LifecycleResult()
-
-    try:
-        start = time.monotonic()
-        while not client.wait_for_service(timeout_sec=1.0):
-            if time.monotonic() - start > timeout_sec:
-                result.details = f"Service {service_name} not available"
-                return result
-            _spin_once_or_sleep(exc, managed)
-
-        while time.monotonic() - start < timeout_sec:
-            future = client.call_async(GetState.Request())
-            while not future.done():
-                _spin_once_or_sleep(exc, managed)
+    with ExecutorContext(node, executor, service_node_prefix='nav2_checker') as ec:
+        service_name = f"/{lifecycle_node_name}/get_state"
+        client = ec.service_node.create_client(GetState, service_name)
+        try:
+            start = time.monotonic()
+            while not client.wait_for_service(timeout_sec=1.0):
                 if time.monotonic() - start > timeout_sec:
-                    break
-            if future.done() and future.result() is not None:
-                result.current_state = LifecycleState(future.result().current_state.id)
-                if result.current_state == expected_state:
-                    result.success = True
-                    result.time_to_reach_ms = (time.monotonic() - start) * 1000
-                    result.details = f"{lifecycle_node_name} reached {lifecycle_state_to_string(expected_state)}"
+                    result.details = f"Service {service_name} not available"
                     return result
-            time.sleep(0.1)
+                ec.spin_once()
 
-        result.time_to_reach_ms = (time.monotonic() - start) * 1000
-        result.details = (
-            f"{lifecycle_node_name} in {lifecycle_state_to_string(result.current_state)}, "
-            f"expected {lifecycle_state_to_string(expected_state)}"
-        )
-    finally:
-        _cleanup_managed(svc_node, client, exc, temp, managed)
+            while time.monotonic() - start < timeout_sec:
+                future = client.call_async(GetState.Request())
+                while not future.done():
+                    ec.spin_once()
+                    if time.monotonic() - start > timeout_sec:
+                        break
+                if future.done() and future.result() is not None:
+                    result.current_state = LifecycleState(future.result().current_state.id)
+                    if result.current_state == expected_state:
+                        result.success = True
+                        result.time_to_reach_ms = (time.monotonic() - start) * 1000
+                        result.details = f"{lifecycle_node_name} reached {lifecycle_state_to_string(expected_state)}"
+                        return result
+                time.sleep(0.1)
+
+            result.time_to_reach_ms = (time.monotonic() - start) * 1000
+            result.details = (
+                f"{lifecycle_node_name} in {lifecycle_state_to_string(result.current_state)}, "
+                f"expected {lifecycle_state_to_string(expected_state)}"
+            )
+        finally:
+            ec.service_node.destroy_client(client)
     return result
 
 
@@ -344,38 +299,36 @@ def check_controller_active(
     """Check that a ros2_control controller is active."""
     from controller_manager_msgs.srv import ListControllers
 
-    svc_node, exc, temp, managed = _acquire_managed(node, executor)
-
-    service_name = f"/{controller_manager_name}/list_controllers"
-    client = svc_node.create_client(ListControllers, service_name)
     result = ControllerResult(controller_name=controller_name)
-
-    try:
-        start = time.monotonic()
-        while not client.wait_for_service(timeout_sec=1.0):
-            if time.monotonic() - start > timeout_sec:
-                result.details = f"Service {service_name} not available"
-                return result
-            _spin_once_or_sleep(exc, managed)
-
-        while time.monotonic() - start < timeout_sec:
-            future = client.call_async(ListControllers.Request())
-            while not future.done():
-                _spin_once_or_sleep(exc, managed)
+    with ExecutorContext(node, executor, service_node_prefix='nav2_checker') as ec:
+        service_name = f"/{controller_manager_name}/list_controllers"
+        client = ec.service_node.create_client(ListControllers, service_name)
+        try:
+            start = time.monotonic()
+            while not client.wait_for_service(timeout_sec=1.0):
                 if time.monotonic() - start > timeout_sec:
-                    break
-            if future.done() and future.result() is not None:
-                for ctrl in future.result().controller:
-                    if ctrl.name == controller_name:
-                        result.state = ctrl.state
-                        if ctrl.state == "active":
-                            result.success = True
-                            result.details = f"Controller {controller_name} is active"
-                            return result
-            time.sleep(0.1)
-        result.details = f"Controller {controller_name} state: {result.state}"
-    finally:
-        _cleanup_managed(svc_node, client, exc, temp, managed)
+                    result.details = f"Service {service_name} not available"
+                    return result
+                ec.spin_once()
+
+            while time.monotonic() - start < timeout_sec:
+                future = client.call_async(ListControllers.Request())
+                while not future.done():
+                    ec.spin_once()
+                    if time.monotonic() - start > timeout_sec:
+                        break
+                if future.done() and future.result() is not None:
+                    for ctrl in future.result().controller:
+                        if ctrl.name == controller_name:
+                            result.state = ctrl.state
+                            if ctrl.state == "active":
+                                result.success = True
+                                result.details = f"Controller {controller_name} is active"
+                                return result
+                time.sleep(0.1)
+            result.details = f"Controller {controller_name} state: {result.state}"
+        finally:
+            ec.service_node.destroy_client(client)
     return result
 
 
@@ -402,14 +355,13 @@ def check_controller_manager_available(
     """Check that the controller manager is available."""
     from controller_manager_msgs.srv import ListControllers
 
-    svc_node, exc, temp, managed = _acquire_managed(node, executor)
-
-    client = svc_node.create_client(
-        ListControllers, f"/{controller_manager_name}/list_controllers")
-    try:
-        return client.wait_for_service(timeout_sec=timeout_sec)
-    finally:
-        _cleanup_managed(svc_node, client, exc, temp, managed)
+    with ExecutorContext(node, executor, service_node_prefix='nav2_checker') as ec:
+        client = ec.service_node.create_client(
+            ListControllers, f"/{controller_manager_name}/list_controllers")
+        try:
+            return client.wait_for_service(timeout_sec=timeout_sec)
+        finally:
+            ec.service_node.destroy_client(client)
 
 
 # -- Stack-level shortcuts ─────────────────────────────────────────────────
@@ -452,8 +404,6 @@ def check_localization_active(
         result.details = lifecycle.details
         return result
 
-    svc_node, exc, temp, managed = _acquire_managed(node, executor)
-
     pose_msg = None
 
     def cb(msg):
@@ -462,24 +412,21 @@ def check_localization_active(
 
     qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                       durability=DurabilityPolicy.VOLATILE)
-    sub = svc_node.create_subscription(PoseWithCovarianceStamped, pose_topic, cb, qos)
-
-    try:
-        t0 = time.monotonic()
-        while pose_msg is None and time.monotonic() - t0 < 5.0:
-            _spin_once_or_sleep(exc, managed)
-        if pose_msg is not None:
-            cov = pose_msg.pose.covariance
-            result.covariance_trace = cov[0] + cov[7] + cov[35]
-            result.converged = result.covariance_trace <= max_covariance_trace
-            result.details = f"Covariance trace: {result.covariance_trace:.4f}"
-        else:
-            result.details = "No pose received from AMCL"
-    finally:
-        svc_node.destroy_subscription(sub)
-        if managed:
-            exc.remove_node(temp)
-            temp.destroy_node()
+    with ExecutorContext(node, executor, service_node_prefix='nav2_checker') as ec:
+        sub = ec.service_node.create_subscription(PoseWithCovarianceStamped, pose_topic, cb, qos)
+        try:
+            t0 = time.monotonic()
+            while pose_msg is None and time.monotonic() - t0 < 5.0:
+                ec.spin_once()
+            if pose_msg is not None:
+                cov = pose_msg.pose.covariance
+                result.covariance_trace = cov[0] + cov[7] + cov[35]
+                result.converged = result.covariance_trace <= max_covariance_trace
+                result.details = f"Covariance trace: {result.covariance_trace:.4f}"
+            else:
+                result.details = "No pose received from AMCL"
+        finally:
+            ec.service_node.destroy_subscription(sub)
     return result
 
 
@@ -492,8 +439,6 @@ def check_reaches_goal(
     executor=None,
 ) -> NavigationResult:
     """Check that the robot reaches a goal position via odometry."""
-    from sim_harness.checks import _acquire_executor
-    exc, managed = _acquire_executor(node, executor)
     goal_xy = (goal_pose.pose.position.x, goal_pose.pose.position.y)
     latest_pos: List[Optional[Tuple[float, float]]] = [None]
     qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -506,26 +451,22 @@ def check_reaches_goal(
     result = NavigationResult()
 
     try:
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < timeout_sec:
-            if managed:
-                exc.spin_once(timeout_sec=0.1)
-            else:
-                time.sleep(0.1)
-            if latest_pos[0] is not None:
-                d = _dist2(latest_pos[0], goal_xy)
-                result.final_distance_to_goal = d
-                if d <= tolerance:
-                    result.success = True
-                    result.time_taken_sec = time.monotonic() - t0
-                    result.details = f"Reached goal in {result.time_taken_sec:.1f}s (dist {d:.2f}m)"
-                    return result
-        result.time_taken_sec = time.monotonic() - t0
-        result.details = f"Timeout after {result.time_taken_sec:.1f}s, dist {result.final_distance_to_goal:.2f}m"
+        with ExecutorContext(node, executor) as ec:
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < timeout_sec:
+                ec.spin_once(timeout_sec=0.1)
+                if latest_pos[0] is not None:
+                    d = _dist2(latest_pos[0], goal_xy)
+                    result.final_distance_to_goal = d
+                    if d <= tolerance:
+                        result.success = True
+                        result.time_taken_sec = time.monotonic() - t0
+                        result.details = f"Reached goal in {result.time_taken_sec:.1f}s (dist {d:.2f}m)"
+                        return result
+            result.time_taken_sec = time.monotonic() - t0
+            result.details = f"Timeout after {result.time_taken_sec:.1f}s, dist {result.final_distance_to_goal:.2f}m"
     finally:
         node.destroy_subscription(sub)
-        if managed:
-            exc.remove_node(node)
     return result
 
 
@@ -538,8 +479,6 @@ def check_follows_path(
     if len(path) < 2:
         return NavigationResult(details="Path must have at least 2 waypoints")
 
-    from sim_harness.checks import _acquire_executor
-    exc, managed = _acquire_executor(node, executor)
     pts = [(p.pose.position.x, p.pose.position.y) for p in path]
     max_dev = [0.0]
     latest_pos: List[Optional[Tuple[float, float]]] = [None]
@@ -556,30 +495,26 @@ def check_follows_path(
     result = NavigationResult()
 
     try:
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < timeout_sec:
-            if managed:
-                exc.spin_once(timeout_sec=0.1)
-            else:
-                time.sleep(0.1)
-            if max_dev[0] > corridor_width:
-                result.time_taken_sec = time.monotonic() - t0
-                result.details = f"Exceeded corridor: {max_dev[0]:.2f}m > {corridor_width}m"
-                return result
-            if latest_pos[0] is not None:
-                d = _dist2(latest_pos[0], pts[-1])
-                result.final_distance_to_goal = d
-                if d <= corridor_width:
-                    result.success = True
+        with ExecutorContext(node, executor) as ec:
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < timeout_sec:
+                ec.spin_once(timeout_sec=0.1)
+                if max_dev[0] > corridor_width:
                     result.time_taken_sec = time.monotonic() - t0
-                    result.details = f"Followed path, max deviation: {max_dev[0]:.2f}m"
+                    result.details = f"Exceeded corridor: {max_dev[0]:.2f}m > {corridor_width}m"
                     return result
-        result.time_taken_sec = time.monotonic() - t0
-        result.details = f"Timeout, max deviation: {max_dev[0]:.2f}m"
+                if latest_pos[0] is not None:
+                    d = _dist2(latest_pos[0], pts[-1])
+                    result.final_distance_to_goal = d
+                    if d <= corridor_width:
+                        result.success = True
+                        result.time_taken_sec = time.monotonic() - t0
+                        result.details = f"Followed path, max deviation: {max_dev[0]:.2f}m"
+                        return result
+            result.time_taken_sec = time.monotonic() - t0
+            result.details = f"Timeout, max deviation: {max_dev[0]:.2f}m"
     finally:
         node.destroy_subscription(sub)
-        if managed:
-            exc.remove_node(node)
     return result
 
 
@@ -588,65 +523,51 @@ def check_navigation_action_succeeds(
     action_name: str = "/navigate_to_pose", executor=None,
 ) -> NavigationResult:
     """Send NavigateToPose action and wait for completion."""
-    managed = executor is None
-    if managed:
-        temp = _temp_node("nav_action_client")
-        action_node = temp
-        exc = SingleThreadedExecutor()
-        exc.add_node(temp)
-    else:
-        action_node = node
-        temp = None
-        exc = executor
-
-    client = ActionClient(action_node, NavigateToPose, action_name)
     result = NavigationResult()
-
-    try:
-        if not client.wait_for_server(timeout_sec=10.0):
-            result.details = f"Action server {action_name} not available"
-            return result
-
-        goal_msg = NavigateToPose.Goal()
-        goal_msg.pose = goal_pose
-        future = client.send_goal_async(goal_msg)
-        t0 = time.monotonic()
-
-        while not future.done():
-            _spin_once_or_sleep(exc, managed)
-            if time.monotonic() - t0 > timeout_sec:
-                result.details = "Timeout waiting for goal acceptance"
+    with ExecutorContext(node, executor, service_node_prefix='nav_action_client') as ec:
+        client = ActionClient(ec.service_node, NavigateToPose, action_name)
+        try:
+            if not client.wait_for_server(timeout_sec=10.0):
+                result.details = f"Action server {action_name} not available"
                 return result
 
-        handle = future.result()
-        if not handle.accepted:
-            result.details = "Goal was rejected"
-            return result
+            goal_msg = NavigateToPose.Goal()
+            goal_msg.pose = goal_pose
+            future = client.send_goal_async(goal_msg)
+            t0 = time.monotonic()
 
-        result_future = handle.get_result_async()
-        while not result_future.done():
-            _spin_once_or_sleep(exc, managed)
-            if time.monotonic() - t0 > timeout_sec:
-                # Cancel the in-flight goal so Nav2 stops working on it
-                handle.cancel_goal_async()
-                for _ in range(20):
-                    _spin_once_or_sleep(exc, managed)
-                result.details = "Timeout waiting for navigation result"
+            while not future.done():
+                ec.spin_once()
+                if time.monotonic() - t0 > timeout_sec:
+                    result.details = "Timeout waiting for goal acceptance"
+                    return result
+
+            handle = future.result()
+            if not handle.accepted:
+                result.details = "Goal was rejected"
                 return result
 
-        action_result = result_future.result()
-        result.time_taken_sec = time.monotonic() - t0
-        if action_result.status == GoalStatus.STATUS_SUCCEEDED:
-            result.success = True
-            result.final_distance_to_goal = 0.0
-            result.details = f"Navigation succeeded in {result.time_taken_sec:.1f}s"
-        else:
-            result.details = f"Navigation failed with status {action_result.status}"
-    finally:
-        client.destroy()
-        if managed:
-            exc.remove_node(temp)
-            temp.destroy_node()
+            result_future = handle.get_result_async()
+            while not result_future.done():
+                ec.spin_once()
+                if time.monotonic() - t0 > timeout_sec:
+                    # Cancel the in-flight goal so Nav2 stops working on it
+                    handle.cancel_goal_async()
+                    for _ in range(20):
+                        ec.spin_once()
+                    result.details = "Timeout waiting for navigation result"
+                    return result
+
+            action_result = result_future.result()
+            result.time_taken_sec = time.monotonic() - t0
+            if action_result.status == GoalStatus.STATUS_SUCCEEDED:
+                result.success = True
+                result.final_distance_to_goal = 0.0
+                result.details = f"Navigation succeeded in {result.time_taken_sec:.1f}s"
+            else:
+                result.details = f"Navigation failed with status {action_result.status}"
+        finally:
+            client.destroy()
     return result
 
 
@@ -657,21 +578,15 @@ def check_costmap_contains_obstacle(
     executor=None,
 ) -> bool:
     """Check that the costmap contains an obstacle at a position."""
-    from sim_harness.checks import _acquire_executor
     msgs: list = []
     qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                       durability=DurabilityPolicy.VOLATILE)
-    exc, managed = _acquire_executor(node, executor)
     sub = node.create_subscription(OccupancyGrid, costmap_topic, msgs.append, qos)
     try:
-        if managed:
-            spin_for_duration(exc, timeout_sec)
-        else:
-            wait_for_duration(timeout_sec)
+        with ExecutorContext(node, executor) as ec:
+            ec.wait(timeout_sec)
     finally:
         node.destroy_subscription(sub)
-        if managed:
-            exc.remove_node(node)
 
     if not msgs:
         return False

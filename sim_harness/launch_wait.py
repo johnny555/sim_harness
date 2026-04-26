@@ -23,7 +23,7 @@ Example::
     )
 
     wait_for_bt = WaitForCondition(
-        condition=lifecycle_active('/yt220_01/bt_navigator'),
+        condition=lifecycle_active('/<namespace>/bt_navigator'),
         actions=[lifecycle_manager_navigation],
         timeout=60.0,
         description='Wait for bt_navigator active',

@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 
 """
-Bridge node to convert Twist to TwistStamped for ros2_control steering controllers.
+Bridge any Twist publisher to any TwistStamped subscriber.
 
-Nav2 controller_server publishes geometry_msgs/Twist on cmd_vel, but ros2_control's
-ackermann_steering_controller (ROS2 Jazzy) only subscribes to
-geometry_msgs/TwistStamped on ~/reference. There is no config option to change this —
-the bridge is mandatory.
+Some ros2_control controllers (e.g. ackermann / steering controllers on Jazzy)
+only accept geometry_msgs/TwistStamped, while upstream planners (e.g. Nav2
+controller_server) publish geometry_msgs/Twist. This node stamps and
+republishes; topic names are configurable via remapping.
 
 Parameters:
     frame_id (str): Frame ID for the TwistStamped header (default: base_link)
 
-Topics:
+Topics (use ros2 launch remaps to point at the real endpoints):
     Subscribes: cmd_vel (geometry_msgs/Twist)
     Publishes: cmd_vel_stamped (geometry_msgs/TwistStamped)
 """
