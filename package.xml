@@ -4,26 +4,25 @@
   <name>sim_harness</name>
   <version>1.0.0</version>
   <description>
-    Unified C++ and Python test harness for ROS 2 simulation testing.
-    Provides reusable test fixtures, message collection, requirements validation,
-    and high-level test primitives for vehicle, sensor, navigation, and lifecycle testing.
-    Supports launch_testing orchestration for integration tests.
+    Pytest plugin and Python test harness for ROS 2 simulation testing.
+    Provides a SimTestFixture, a check-function library
+    (sensors / motion / services / nav2 / perception), launch helpers,
+    and a @pytest.mark.requirement marker that exports results to a
+    Jama-importable spreadsheet (--jama-xlsx). Also installs a small
+    set of bridge nodes (tf_relay, twist_to_twist_stamped,
+    gps_map_odom_node) and the standalone ekf_wrapper_node C++ helper.
   </description>
   <maintainer email="john@example.com">John</maintainer>
   <license>Apache-2.0</license>
 
-  <!-- Build system: ament_cmake_python for mixed C++/Python -->
+  <!-- Build system: ament_cmake_python is sufficient since the only C++ left
+       is the standalone ekf_wrapper_node executable. -->
   <buildtool_depend>ament_cmake_python</buildtool_depend>
 
-  <!-- Core ROS 2 C++ -->
-  <depend>rclcpp</depend>
-  <depend>rclcpp_lifecycle</depend>
-  <depend>rclcpp_action</depend>
-
-  <!-- Core ROS 2 Python -->
+  <!-- Python runtime -->
   <depend>rclpy</depend>
 
-  <!-- Messages (shared) -->
+  <!-- ROS 2 message types used by the Python check-function library -->
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>nav_msgs</depend>
@@ -31,13 +30,12 @@
   <depend>tf2_msgs</depend>
   <depend>lifecycle_msgs</depend>
   <depend>rcl_interfaces</depend>
-
-  <!-- Controller/Navigation -->
   <depend>controller_manager_msgs</depend>
   <depend>nav2_msgs</depend>
   <depend>tf2_ros</depend>
 
   <!-- EKF wrapper node (sim-time deadlock workaround) -->
+  <depend>rclcpp</depend>
   <depend>robot_localization</depend>
   <depend>diagnostic_updater</depend>
   <depend>diagnostic_msgs</depend>
@@ -50,12 +48,11 @@
   <depend>launch_testing_ros</depend>
   <exec_depend>launch_testing_ament_cmake</exec_depend>
 
-  <!-- CLI extension -->
-  <exec_depend>ros2cli</exec_depend>
+  <!-- launch_pytest powers the gazebo_world fixture (ROS 2 native pytest) -->
+  <exec_depend>launch_pytest</exec_depend>
 
-  <!-- C++ Testing -->
-  <test_depend>ament_cmake_gtest</test_depend>
-  <test_depend>launch_testing_ament_cmake</test_depend>
+  <!-- Pytest plugin: openpyxl powers the Jama xlsx exporter -->
+  <exec_depend>python3-openpyxl</exec_depend>
 
   <!-- Python Testing -->
   <test_depend>python3-pytest</test_depend>

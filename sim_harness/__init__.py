@@ -1,8 +1,7 @@
 # Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-sim_harness -- Python test utilities for ROS 2 simulation testing.
+"""sim_harness — Python test utilities for ROS 2 simulation testing.
 
 Quick start::
 
@@ -17,15 +16,19 @@ Quick start::
             result = check_lidar_valid(self.node, '/scan')
             assert result.ok, result.details
 
-Check functions (Layer 1)::
+Check functions::
 
     from sim_harness.checks import check_sensor_publishing, check_gps_valid
     from sim_harness.nav2 import check_nav2_active, check_reaches_goal
     from sim_harness.perception import check_object_detected
 
-Validation (Layer 2)::
+Pytest plugin (auto-loaded via ``pytest11`` entry point)::
 
-    from sim_harness.validation import RequirementValidator, ValidationScope
+    @pytest.mark.requirement("REQ-001", "Sensor publishes data", category="Sensors")
+    def test_sensor():
+        ...
+
+    pytest --jama-xlsx out.xlsx        # export Jama-importable spreadsheet
 """
 
 # -- Layer 0: Core (what every test needs) ─────────────────────────────────
@@ -36,6 +39,7 @@ from sim_harness.fixture import (  # noqa: F401
 )
 from sim_harness.collector import MessageCollector  # noqa: F401
 from sim_harness.spin import (  # noqa: F401
+    ExecutorContext,
     spin_for_duration,
     spin_until_condition,
     spin_until_messages_received,
@@ -72,39 +76,11 @@ from sim_harness.launch_utils import (  # noqa: F401
     topic_publishing,
 )
 
-# -- Validation / requirements ─────────────────────────────────────────────
-from sim_harness.validation.validation_result import (  # noqa: F401
-    ValidationResult,
-    ValidationResultCollector,
-    ValidationScope,
-)
-from sim_harness.validation.requirement_validator import (  # noqa: F401
-    RequirementValidator,
-)
-
-# -- Test runner (lazy) ────────────────────────────────────────────────────
-
-def get_test_runner():
-    """Get the TestRunner class for running launch tests."""
-    from sim_harness.test_runner import TestRunner
-    return TestRunner
-
-def get_test_registry():
-    """Get the TestRegistry class for discovering tests."""
-    from sim_harness.test_runner import TestRegistry
-    return TestRegistry
-
-
-# -- Backward compatibility ────────────────────────────────────────────────
-# Everything previously importable via ``from sim_harness import X`` still
-# works.  These names are importable but NOT in ``__all__``.
-
+# -- Backward compatibility re-exports for sim_harness.checks ─────────────
 from sim_harness.fixture import SimulationTestFixture  # noqa: F401
 
 from sim_harness.checks import (  # noqa: F401
-    # Result types
     ServiceResult, SensorDataResult, TimingResult, MovementResult, VelocityResult,
-    # check_* (primary names)
     check_service_available,
     check_action_server_available,
     check_node_running,
@@ -132,6 +108,7 @@ __all__ = [
     # Layer 0: Core fixture
     'SimTestFixture',
     'MessageCollector',
+    'ExecutorContext',
     'spin_for_duration',
     'spin_until_condition',
     'spin_until_messages_received',
@@ -156,12 +133,4 @@ __all__ = [
     'lifecycle_active',
     'service_available',
     'topic_publishing',
-    # Validation
-    'ValidationResult',
-    'ValidationResultCollector',
-    'ValidationScope',
-    'RequirementValidator',
-    # Test runner
-    'get_test_runner',
-    'get_test_registry',
 ]

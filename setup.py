@@ -1,11 +1,11 @@
 # Copyright 2026 The sim_harness Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Setup file for sim_harness package.
+"""Setup file for sim_harness.
 
-This file is used by ament_python_install_package to install the Python
-package with its entry points for ros2cli.
+Most metadata lives in ``setup.cfg``; this file exists so
+``ament_python_install_package`` (called from ``CMakeLists.txt``) has
+something to import.
 """
 
 from setuptools import setup, find_packages
@@ -14,7 +14,11 @@ setup(
     name='sim_harness',
     version='1.0.0',
     packages=find_packages(exclude=['test']),
-    install_requires=['setuptools'],
+    # openpyxl is the runtime backend for the --jama-xlsx pytest plugin.
+    # In a ROS 2 workspace, prefer `rosdep install` (resolves to
+    # python3-openpyxl via apt); listing it here covers the non-ROS pip-install
+    # path and matches the package.xml exec_depend.
+    install_requires=['setuptools', 'openpyxl>=3.0'],
     extras_require={
         'hypothesis': ['hypothesis>=6.0'],
     },
@@ -23,22 +27,13 @@ setup(
     author_email='john@example.com',
     maintainer='John',
     maintainer_email='john@example.com',
-    description='Unified test harness for ROS 2 simulation testing',
+    description='Pytest plugin and helpers for ROS 2 simulation testing',
     license='Apache-2.0',
     entry_points={
-        # Register 'test' as a new ros2 command
-        'ros2cli.command': [
-            'test = sim_harness.ros2test.command.test:TestCommand',
-        ],
-        # Register the extension point for ros2 test verbs
-        'ros2cli.extension_point': [
-            'ros2test.verb = sim_harness.ros2test.verb:VerbExtension',
-        ],
-        # Register the verb implementations
-        'ros2test.verb': [
-            'list = sim_harness.ros2test.verb.list:ListVerb',
-            'run = sim_harness.ros2test.verb.run:RunVerb',
-            'failed = sim_harness.ros2test.verb.failed:FailedVerb',
+        # Pytest plugins (auto-loaded whenever sim_harness is on the import path).
+        'pytest11': [
+            'sim_harness_jama = sim_harness.pytest_jama_plugin',
+            'sim_harness_ros  = sim_harness.pytest_ros_fixtures',
         ],
     },
 )

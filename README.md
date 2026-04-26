@@ -2,46 +2,113 @@
 
 A reusable ROS 2 test harness for simulation-based integration testing.
 
-`sim_harness` provides a pytest-friendly fixture, check functions, requirement
-tracking, and a simulator-lifecycle abstraction. It is deliberately project-
-and robot-agnostic: topic names, vehicle types, BT node names, and world
-content are supplied by the consumer.
+`sim_harness` is a Python library and pytest plugin: pytest fixtures that
+spin up a `rclpy` node + `MessageCollector` for each test, a check-function
+library (`checks`, `nav2`, `perception`, `navigation_quality`), launch
+helpers, and a `@pytest.mark.requirement` marker that the plugin exports to
+a Jama-importable spreadsheet via `--jama-xlsx`.
+
+It is deliberately project- and robot-agnostic: topic names, vehicle types,
+BT node names, and world content are supplied by the consumer.
 
 ## Quick start
 
+`sim_harness` registers two pytest plugins via `pytest11` entry points so
+they auto-load:
+
+- `sim_harness_ros` — provides `ros_node` + `message_collector_factory` (and
+  a session-scoped `ros_context` that handles `rclpy.init()` /
+  `rclpy.shutdown()`).
+- `sim_harness_jama` — adds `@pytest.mark.requirement(...)` and the
+  `--jama-xlsx PATH` exporter.
+
+A test module bringing up a Gazebo launch with `launch_pytest`:
+
 ```python
-from sim_harness import SimTestFixture
+import launch
+import launch_pytest
+import pytest
+from sensor_msgs.msg import LaserScan
 from sim_harness.checks import check_lidar_valid
-from sim_harness.nav2 import check_lifecycle_node_active
 
-class TestMyRobot(SimTestFixture):
-    LAUNCH_PACKAGE = 'my_robot_sim'
-    LAUNCH_FILE = 'sim.launch.py'
+@launch_pytest.fixture(scope='module')
+def my_sim_launch():
+    return launch.LaunchDescription([
+        # ... your launch actions ...
+        launch_pytest.actions.ReadyToTest(),
+    ])
 
-    def test_lidar(self):
-        result = check_lidar_valid(self.node, '/scan')
-        assert result.ok, result.details
-
-    def test_nav2_stack(self):
-        check_lifecycle_node_active(self.node, '/bt_navigator')
+@pytest.mark.launch(fixture=my_sim_launch)
+@pytest.mark.requirement("REQ-SEN-001", "LIDAR publishes valid scans",
+                         category="Sensors")
+def test_lidar(my_sim_launch, ros_node, message_collector_factory):
+    scans = message_collector_factory(LaserScan, '/scan')
+    ros_node.spin_until(lambda: scans.count() > 0, timeout_sec=10.0)
+    result = check_lidar_valid(ros_node.node, '/scan')
+    assert result.ok, result.details
 ```
 
-Subclass `SimTestFixture`, point it at your launch file, and use the check
-functions to assert conditions without writing subscription/executor
-boilerplate.
+Tests are plain pytest functions: declare what fixtures they need, no
+`unittest.TestCase` ceremony. The legacy `SimTestFixture` class
+(`sim_harness.fixture`) still exists for the older `class TestX(SimTestFixture)`
+style but new code should prefer the fixture-based pattern shown above.
+
+## Running tests
+
+The DCE workspace ships a thin wrapper (`run_test.sh`) and a `tasks.mk`
+of common targets so tests can be run with one command:
+
+```bash
+# from the workspace root (where install/ lives)
+./run_test.sh                        # full pytest suite
+./run_test.sh -m marionette          # marker filter
+./run_test.sh -m "not gazebo"        # skip Gazebo-backed tests
+./run_test.sh --jama-xlsx /tmp/r.xlsx  # with Jama xlsx export
+
+# convenience targets
+make -f tasks.mk test                # full suite
+make -f tasks.mk test-fast           # marker filter "not gazebo"
+make -f tasks.mk test-marionette     # marionette-tagged only
+make -f tasks.mk jama                # full suite + xlsx
+make -f tasks.mk help                # list all targets
+```
+
+`run_test.sh` sets `SMOKE_HEADLESS=true`, `ROS_DOMAIN_ID=142` (override
+by exporting it), `VGL_DISPLAY=egl`, and sources `install/setup.bash`
+relative to its own location. The Jama export comes from this package's
+auto-loaded pytest plugin (see "Tagging tests with Jama requirement IDs"
+below).
+
+Markers are declared in `src/simulator/pytest.ini`:
+
+| Marker          | Meaning                                                  |
+|-----------------|----------------------------------------------------------|
+| `gazebo`        | requires a running Gazebo simulator (slow)               |
+| `marionette`    | covers the Marionette UDP protocol or its node           |
+| `nav2`          | exercises Nav2 lifecycle / planner / controller          |
+| `validation`    | validates a numbered system requirement                  |
+| `requires_sim`  | needs an externally-running simulator                    |
+
+Compose them with boolean expressions:
+
+```bash
+./run_test.sh -m "marionette and not gazebo"   # protocol unit tests only
+./run_test.sh -m "validation and not gazebo"   # config-only validation
+```
 
 ## Layers
 
 | Layer | Module                       | Purpose                                              |
 |-------|------------------------------|------------------------------------------------------|
-| 0     | `sim_harness.fixture`        | `SimTestFixture` — pytest base, nodes, executor     |
+| 0     | `sim_harness.pytest_ros_fixtures` | Pytest fixtures: `ros_context`, `ros_node`, `message_collector_factory` |
+| 0     | `sim_harness.fixture`        | `SimTestFixture` — legacy class-based base          |
 | 0     | `sim_harness.spin`           | Spin helpers (`spin_for_duration`, `spin_until_*`)  |
 | 0     | `sim_harness.collector`      | `MessageCollector` for topic sampling                |
 | 1     | `sim_harness.checks`         | Generic sensor/service/motion checks                 |
 | 1     | `sim_harness.nav2`           | Nav2 lifecycle + action checks                       |
 | 1     | `sim_harness.perception`     | Detection / perception checks                        |
 | 1     | `sim_harness.navigation_quality` | Motion quality tracker + pluggable monitors     |
-| 2     | `sim_harness.validation`     | `RequirementValidator`, `ValidationScope`           |
+| 1     | `sim_harness.pytest_jama_plugin` | Pytest plugin: `@pytest.mark.requirement` + `--jama-xlsx` |
 | 2     | `sim_harness.simulator`      | `SimulatorInterface`, `GazeboBackend`, lifecycle    |
 | 2     | `sim_harness.launch_utils`   | `chain_on_exit`, Gazebo env setup                   |
 
@@ -53,35 +120,28 @@ the others.
 `sim_harness` is designed to be configured, not forked. Use these hooks to
 add project-specific behaviour without modifying the library.
 
-### Scoped validation results
+### Tagging tests with Jama requirement IDs
 
-`RequirementValidator` records into the thread-local collector by default.
-To route a fixture's results into a private `ValidationScope` (for
-per-run reporting, parallel test isolation, or an external exporter):
-
-```python
-from sim_harness.validation import RequirementValidator, ValidationScope
-
-class MyFixture(SimTestFixture, RequirementValidator):
-    pass
-
-scope = ValidationScope('suite_A')
-fix = MyFixture()
-fix.set_validation_scope(scope)
-# ... run tests ...
-scope.export_to_json('results/suite_A.json')
-```
-
-Or bind a scope at class level, or install it on the collector so that
-legacy code calling `ValidationResultCollector.instance()` writes into
-your scope too:
+The `pytest_jama_plugin` auto-loads via the `pytest11` entry point. Tag
+tests with `@pytest.mark.requirement(...)` and the plugin will write a
+Jama-importable spreadsheet when `--jama-xlsx PATH` is supplied:
 
 ```python
-from sim_harness.validation import ValidationResultCollector, ValidationScope
+import pytest
 
-SUITE = ValidationScope('nightly')
-ValidationResultCollector.set_scope(SUITE)
+@pytest.mark.requirement("REQ-SEN-001", "LIDAR publishes valid data",
+                         category="Sensors")
+def test_lidar(node):
+    ...
+    assert ...
+
+# pytest --jama-xlsx /tmp/results.xlsx --jama-project DCE
 ```
+
+The xlsx has two sheets: detailed `Test Results` (per-test rows including
+the Requirement ID, status, duration, and failure message) and `Summary`
+(pass/fail counts, total duration, project key). When `--jama-xlsx` is
+omitted, the plugin is a no-op — tests still run, just no spreadsheet.
 
 ### Pluggable navigation-quality monitors
 
@@ -178,22 +238,21 @@ collision sources) so the project can configure the library from outside.
 
 ```
 sim_harness/
-├── sim_harness/            # Python package
-│   ├── fixture.py          # SimTestFixture (Layer 0)
-│   ├── spin.py             # Spin helpers (Layer 0)
-│   ├── collector.py        # MessageCollector (Layer 0)
-│   ├── checks.py           # Generic checks (Layer 1)
-│   ├── nav2.py             # Nav2 checks (Layer 1)
-│   ├── perception.py       # Detection checks (Layer 1)
-│   ├── navigation_quality.py  # Motion tracker + monitors (Layer 1)
-│   ├── validation/         # Requirement tracking (Layer 2)
-│   ├── simulator/          # Simulator lifecycle (Layer 2)
-│   └── launch_utils.py     # launch helpers (Layer 2)
-├── src/                    # C++ library
-├── include/                # Public C++ headers
-├── launch/                 # Reusable launch fragments
-├── test/                   # Unit tests for the harness itself
-└── examples/               # Reference integrations (e.g. turtlebot3)
+├── sim_harness/                # Python package
+│   ├── pytest_ros_fixtures.py  # ros_node + message_collector_factory (Layer 0)
+│   ├── fixture.py              # SimTestFixture (legacy class-based, Layer 0)
+│   ├── spin.py                 # Spin helpers (Layer 0)
+│   ├── collector.py            # MessageCollector (Layer 0)
+│   ├── checks/                 # Generic checks (Layer 1, split by concern)
+│   ├── nav2.py                 # Nav2 checks (Layer 1)
+│   ├── perception.py           # Detection checks (Layer 1)
+│   ├── navigation_quality.py   # Motion tracker + monitors (Layer 1)
+│   ├── pytest_jama_plugin.py   # @pytest.mark.requirement + --jama-xlsx
+│   ├── simulator/              # Simulator lifecycle (Layer 2)
+│   └── launch_utils.py         # launch helpers (Layer 2)
+├── launch/                     # Reusable launch fragments
+├── test/                       # Unit tests for the harness itself
+└── examples/                   # Reference integrations (e.g. turtlebot3)
 ```
 
 ## License
