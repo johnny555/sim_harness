@@ -40,6 +40,9 @@ class LaunchConfig:
     gazebo_startup_delay_sec: float = 5.0
     """Additional delay after Gazebo processes detected."""
 
+    allow_process_only_ready: bool = False
+    """Allow Gazebo process detection without /clock as a ready signal."""
+
 
 class SimulationLauncher:
     """
@@ -66,6 +69,7 @@ class SimulationLauncher:
 
     def __init__(self):
         self._process: Optional[subprocess.Popen] = None
+        self._process_group_id: Optional[int] = None
         self._gazebo = GazeboBackend()
         self._config: Optional[LaunchConfig] = None
         self._log_file = None
@@ -127,6 +131,7 @@ class SimulationLauncher:
                 stderr=subprocess.STDOUT,
                 preexec_fn=os.setsid  # Create new process group for cleanup
             )
+            self._process_group_id = os.getpgid(self._process.pid)
         except Exception as e:
             print(f"Failed to start simulation: {e}")
             try:
@@ -191,13 +196,15 @@ class SimulationLauncher:
                             time.sleep(self._config.gazebo_startup_delay_sec)
                         return True
                     time.sleep(0.5)
-                # Process exists but never became responsive — treat as success
-                # with extra startup delay to allow ROS bridge initialization
-                print(f"[SimLauncher] Gazebo process alive but /clock not "
-                      f"confirmed; proceeding with startup delay", flush=True)
-                if self._config:
+                if self._config and self._config.allow_process_only_ready:
+                    print(f"[SimLauncher] Gazebo process alive but /clock not "
+                          f"confirmed; proceeding because "
+                          f"allow_process_only_ready=True", flush=True)
                     time.sleep(self._config.gazebo_startup_delay_sec)
-                return True
+                    return True
+                print(f"[SimLauncher] Gazebo process alive but /clock not "
+                      f"confirmed; readiness failed", flush=True)
+                return False
             if int(elapsed) > logged_at and int(elapsed) % 10 == 0:
                 logged_at = int(elapsed)
                 poll = (self._process.poll() if self._process else 'N/A')
@@ -207,9 +214,19 @@ class SimulationLauncher:
         print(f"[SimLauncher] Timeout after {timeout_sec}s", flush=True)
         return False
 
-    def stop(self, timeout_sec: float = 10.0) -> None:
+    @property
+    def process_group_id(self) -> Optional[int]:
+        """Get the process group ID owned by this launcher."""
+        return self._process_group_id
+
+    @property
+    def started_by_this_launcher(self) -> bool:
+        """Return True when this launcher owns a running launch process."""
+        return self._process is not None and self._process_group_id is not None
+
+    def stop_owned_processes(self, timeout_sec: float = 10.0) -> None:
         """
-        Stop the simulation.
+        Stop only the process group started by this launcher.
 
         Sends SIGINT first, then SIGKILL if needed.
 
@@ -218,24 +235,32 @@ class SimulationLauncher:
         """
         if self._process is None:
             return
+        if self._process_group_id is None:
+            try:
+                self._process_group_id = os.getpgid(self._process.pid)
+            except (ProcessLookupError, OSError) as e:
+                print(f"[SimLauncher] No owned process group available: {e}",
+                      flush=True)
 
         # Try graceful shutdown first
         try:
             # Send SIGINT to process group
-            try:
-                os.killpg(os.getpgid(self._process.pid), signal.SIGINT)
-            except (ProcessLookupError, OSError) as e:
-                print(f"[SimLauncher] Process group already dead: {e}")
+            if self._process_group_id is not None:
+                try:
+                    os.killpg(self._process_group_id, signal.SIGINT)
+                except (ProcessLookupError, OSError) as e:
+                    print(f"[SimLauncher] Process group already dead: {e}")
 
             # Wait for process to exit
             try:
                 self._process.wait(timeout=timeout_sec)
             except subprocess.TimeoutExpired:
                 # Force kill if still running
-                try:
-                    os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
-                except (ProcessLookupError, OSError):
-                    pass
+                if self._process_group_id is not None:
+                    try:
+                        os.killpg(self._process_group_id, signal.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        pass
                 self._process.wait(timeout=5)
 
         except Exception as e:
@@ -252,6 +277,7 @@ class SimulationLauncher:
 
         finally:
             self._process = None
+            self._process_group_id = None
             # Close log file descriptor
             if self._log_file:
                 try:
@@ -260,7 +286,27 @@ class SimulationLauncher:
                     print(f"[SimLauncher] Warning: failed to close log "
                           f"file: {e}")
                 self._log_file = None
-            # Clean up Gazebo and associated ROS sim processes
+
+    def stop(
+        self,
+        timeout_sec: float = 10.0,
+        allow_global_cleanup: bool = False,
+    ) -> None:
+        """
+        Stop the simulation.
+
+        Normal cleanup is scoped to the launch process group owned by this
+        launcher. Global pattern-based cleanup is available only when
+        ``allow_global_cleanup`` is explicitly enabled.
+
+        Args:
+            timeout_sec: Maximum time to wait for graceful shutdown
+            allow_global_cleanup: If True, also kill globally matched
+                Gazebo and ROS simulation processes.
+        """
+        self.stop_owned_processes(timeout_sec=timeout_sec)
+        if allow_global_cleanup:
+            print("[SimLauncher] Explicit global cleanup enabled", flush=True)
             self._gazebo.kill_all_sim_processes()
 
     def is_running(self) -> bool:
@@ -290,5 +336,10 @@ class SimulationLauncher:
 
 
 def kill_all_gazebo() -> None:
-    """Kill all Gazebo and associated ROS sim processes. Useful for cleanup."""
+    """Kill all Gazebo and associated ROS sim processes globally.
+
+    Warning:
+        This performs destructive pattern-based cleanup and may kill
+        unrelated ROS/Gazebo processes owned by the current user.
+    """
     GazeboBackend().kill_all_sim_processes()

@@ -8,6 +8,7 @@ without a real launch run — uses a fake context whose ``emit_event`` records
 the event and runs the registered matcher/entities synchronously.
 """
 import asyncio
+import subprocess
 import threading
 import time
 
@@ -92,12 +93,12 @@ def test_timeout_proceed_emits_event(ctx):
     assert isinstance(ctx.emitted[0], _ConditionMetEvent)
 
 
-def test_timeout_fail_emits_shutdown(ctx):
+def test_timeout_default_emits_shutdown(ctx):
     from launch.events import Shutdown
 
     action = WaitForCondition(
         condition=lambda: False, actions=[], timeout=0.2,
-        poll_rate_hz=50.0, on_timeout='fail',
+        poll_rate_hz=50.0,
         description='fail-test')
     action.execute(ctx)
 
@@ -201,3 +202,51 @@ def test_execute_returns_event_handler(ctx):
     result = action.execute(ctx)
     assert len(result) == 1
     assert isinstance(result[0], RegisterEventHandler)
+
+
+def test_gz_service_available_detects_service(monkeypatch):
+    from sim_harness import launch_wait
+
+    monkeypatch.setattr(launch_wait.shutil, 'which', lambda _name: '/usr/bin/gz')
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=['gz', 'service', '-l'],
+            returncode=0,
+            stdout='/gazebo/worlds\n/world/sellafield/create_multiple\n',
+            stderr='',
+        )
+
+    monkeypatch.setattr(launch_wait.subprocess, 'run', fake_run)
+
+    check = launch_wait.gz_service_available('/gazebo/worlds')
+    assert check() is True
+
+
+def test_gz_service_available_handles_failures(monkeypatch):
+    from sim_harness import launch_wait
+
+    monkeypatch.setattr(launch_wait.shutil, 'which', lambda _name: '/usr/bin/gz')
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd='gz service -l', timeout=2.0)
+
+    monkeypatch.setattr(launch_wait.subprocess, 'run', fake_run)
+
+    check = launch_wait.gz_service_available('/gazebo/worlds')
+    assert check() is False
+
+
+def test_gz_world_ready_requires_world_and_list_services(monkeypatch):
+    from sim_harness import launch_wait
+
+    available = {'/gazebo/worlds', '/world/sellafield/create_multiple'}
+
+    def fake_gz_service_available(name, **_kwargs):
+        return lambda: name in available
+
+    monkeypatch.setattr(launch_wait, 'gz_service_available', fake_gz_service_available)
+
+    assert launch_wait.gz_world_ready('sellafield')() is True
+    available.remove('/world/sellafield/create_multiple')
+    assert launch_wait.gz_world_ready('sellafield')() is False

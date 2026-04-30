@@ -26,6 +26,23 @@ Configuration
    STARTUP_TIMEOUT = 120.0
    GAZEBO_STARTUP_DELAY = 10.0
 
+Readiness and Cleanup
+---------------------
+
+Simulation startup fails closed by default. A Gazebo process must be running
+and responsive via ``/clock`` before the harness reports the simulation as
+ready. The compatibility option
+``LaunchConfig(allow_process_only_ready=True)`` allows process-only readiness
+for legacy flows, but new tests should keep the strict default.
+
+Teardown is scoped to the ``ros2 launch`` process group started by the
+harness. Broad pattern-based cleanup of Gazebo and ROS processes is available
+only through explicit opt-in APIs such as
+``launcher.stop(allow_global_cleanup=True)`` or
+``manager.stop(allow_global_cleanup=True)``. Global cleanup can kill unrelated
+ROS/Gazebo processes owned by the current user, so reserve it for manual
+recovery or isolated CI jobs.
+
 Using Pre-Started Simulation
 ----------------------------
 

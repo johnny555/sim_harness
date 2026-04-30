@@ -80,15 +80,15 @@ install(FILES resource/${PROJECT_NAME}
 # =============================================================================
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
-  find_package(launch_testing_ament_cmake REQUIRED)
 
   ament_add_pytest_test(test_message_collector_py test/python/test_message_collector.py)
   ament_add_pytest_test(test_launch_wait_py test/python/test_launch_wait.py)
-
-  add_launch_test(
-    test/integration/test_turtlebot3_integration.launch.py
+  ament_add_pytest_test(
+    test_turtlebot3_integration_py
+    test/integration/test_turtlebot3_integration.py
     TIMEOUT 300
   )
+
 endif()
 
 ament_package()

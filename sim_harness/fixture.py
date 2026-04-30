@@ -87,6 +87,7 @@ class SimTestFixture:
     LAUNCH_PACKAGE: str = ""
     LAUNCH_FILE: str = ""
     LAUNCH_ARGS: dict = {}
+    ENV_VARS: dict = {}
     WORLD: str = ""
     ROBOT_MODEL: str = ""
     STARTUP_TIMEOUT: float = 60.0
@@ -340,8 +341,8 @@ class SimTestFixture:
         manager = get_simulation_manager()
         req = SimulationRequest(
             package=cls.LAUNCH_PACKAGE, launch_file=cls.LAUNCH_FILE,
-            launch_args=cls.LAUNCH_ARGS, world=cls.WORLD,
-            robot_model=cls.ROBOT_MODEL,
+            launch_args=cls.LAUNCH_ARGS, env_vars=cls.ENV_VARS,
+            world=cls.WORLD, robot_model=cls.ROBOT_MODEL,
         )
         try:
             ok = manager.request(

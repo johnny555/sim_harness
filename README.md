@@ -198,7 +198,6 @@ wait_for_bt = WaitForCondition(
     condition=lifecycle_active('/robot/bt_navigator'),
     actions=[lifecycle_manager_navigation],
     timeout=60.0,
-    on_timeout='fail',  # shut down the launch if it never activates
     description='Wait for bt_navigator active',
 )
 ```
@@ -210,6 +209,9 @@ Factories returning ready-to-use condition callables:
 - `lifecycle_active(node_name)`
 
 Any `Callable[[], bool]` works — roll your own if none of the factories fit.
+Timeouts fail closed by default and shut the launch down. Use
+`on_timeout='proceed'` only for intentional best-effort flows where running
+the follow-up actions without the predicate is acceptable.
 
 ### Custom simulator backends
 

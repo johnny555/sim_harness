@@ -32,6 +32,8 @@ Example::
 
 import asyncio
 import os
+import shutil
+import subprocess
 import threading
 import time
 from typing import Callable, Iterable, List, Optional, Union
@@ -66,9 +68,10 @@ class WaitForCondition(Action):
     """Launch action that runs *actions* once *condition()* returns ``True``.
 
     The predicate is polled on a daemon thread at ``poll_rate_hz``.  When it
-    returns ``True`` (or on timeout if ``on_timeout='proceed'``) the action
+    returns ``True`` the action
     emits an internal launch event; a registered handler then executes the
-    child actions on the launch event loop.
+    child actions on the launch event loop. Timeout emits
+    :class:`launch.events.Shutdown` by default.
 
     Parameters
     ----------
@@ -76,16 +79,16 @@ class WaitForCondition(Action):
         Predicate polled periodically.  Must be safe to call from a
         background thread.  Exceptions are logged and treated as ``False``.
     actions : Iterable[launch.Action]
-        Actions to execute once the condition is met (or on timeout when
-        ``on_timeout='proceed'``).
+        Actions to execute once the condition is met. They also run on timeout
+        only when ``on_timeout='proceed'`` is explicitly set.
     timeout : float, default 60.0
         Maximum seconds to wait before giving up.
     poll_rate_hz : float, default 2.0
         Polling frequency.
-    on_timeout : {'proceed', 'fail'}, default 'proceed'
-        ``'proceed'`` emits the event anyway and runs the actions (useful as
-        a safety net if the predicate is flaky).  ``'fail'`` emits a
-        :class:`launch.events.Shutdown` event instead.
+    on_timeout : {'proceed', 'fail'}, default 'fail'
+        ``'fail'`` emits a :class:`launch.events.Shutdown` event.
+        ``'proceed'`` emits the event anyway and runs the actions for
+        intentional best-effort launch flows.
     description : str, optional
         Human-readable label for log lines.
 
@@ -103,7 +106,7 @@ class WaitForCondition(Action):
         actions: Iterable[Action],
         timeout: float = 60.0,
         poll_rate_hz: float = 2.0,
-        on_timeout: str = 'proceed',
+        on_timeout: str = 'fail',
         description: Optional[str] = None,
         **kwargs,
     ):
@@ -333,6 +336,60 @@ def service_available(service_name: str) -> Callable[[], bool]:
         node = _get_probe_node()
         names = [name for name, _types in node.get_service_names_and_types()]
         return service_name in names
+    return check
+
+
+def gz_service_available(
+    service_name: str,
+    *,
+    command_timeout_sec: float = 2.0,
+) -> Callable[[], bool]:
+    """Return a condition that's true once a Gazebo transport service exists.
+
+    This probes Gazebo transport directly via ``gz service -l`` instead of the
+    ROS graph. It is intended for launch gates ahead of ``ros_gz_sim create``,
+    which depends on Gazebo world discovery being live before any ROS topics
+    such as ``/clock`` are useful.
+    """
+
+    gz_executable = shutil.which('gz')
+
+    def check() -> bool:
+        if not gz_executable:
+            return False
+
+        try:
+            result = subprocess.run(
+                [gz_executable, 'service', '-l'],
+                capture_output=True,
+                text=True,
+                timeout=command_timeout_sec,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+        if result.returncode != 0:
+            return False
+
+        services = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+        return service_name in services
+
+    return check
+
+
+def gz_world_ready(world_name: str) -> Callable[[], bool]:
+    """Return a condition that's true once Gazebo advertises world services."""
+
+    required_services = (
+        '/gazebo/worlds',
+        f'/world/{world_name}/create_multiple',
+    )
+    checks = tuple(gz_service_available(name) for name in required_services)
+
+    def check() -> bool:
+        return all(predicate() for predicate in checks)
+
     return check
 
 

@@ -94,10 +94,17 @@ def get_gazebo_environment_actions(package_name, models_subdir='models'):
     else:
         resource_path = f'{models_path}:{pkg_share}'
 
+    # ros_gz_sim's bundled launch file builds the child process environment from
+    # os.environ inside an OpaqueFunction, so launch-context-only env updates are
+    # not enough. Mirror the values into this Python process as well.
+    os.environ['GZ_SIM_RESOURCE_PATH'] = resource_path
+
     gz_resource_path = SetEnvironmentVariable(
         name='GZ_SIM_RESOURCE_PATH',
         value=resource_path,
     )
+
+    os.environ['GZ_VERSION'] = 'harmonic'
 
     gz_version = SetEnvironmentVariable(
         name='GZ_VERSION',
@@ -114,20 +121,27 @@ def get_gazebo_environment_actions(package_name, models_subdir='models'):
     else:
         plugin_path = install_lib
 
+    os.environ['GZ_SIM_SYSTEM_PLUGIN_PATH'] = plugin_path
+
     gz_plugin_path = SetEnvironmentVariable(
         name='GZ_SIM_SYSTEM_PLUGIN_PATH',
         value=plugin_path,
     )
 
     # Vulkan workarounds for OGRE2
+    os.environ['VK_INSTANCE_LAYERS'] = ''
     vk_layer_enables = SetEnvironmentVariable(
         name='VK_INSTANCE_LAYERS',
         value='',
     )
+
+    os.environ['VK_ICD_FILENAMES'] = '/usr/share/vulkan/icd.d/nvidia_icd.json'
     vk_icd_filenames = SetEnvironmentVariable(
         name='VK_ICD_FILENAMES',
         value='/usr/share/vulkan/icd.d/nvidia_icd.json',
     )
+
+    os.environ['VK_LOADER_DEBUG'] = 'none'
     vk_loader_debug = SetEnvironmentVariable(
         name='VK_LOADER_DEBUG',
         value='none',

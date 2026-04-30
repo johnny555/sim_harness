@@ -214,6 +214,9 @@ class SimulationRequest:
     launch_args: Dict[str, str] = field(default_factory=dict)
     """Launch arguments."""
 
+    env_vars: Dict[str, str] = field(default_factory=dict)
+    """Environment variables for the launched simulation."""
+
     world: str = ""
     """World file or name (used to determine if restart needed)."""
 
@@ -234,6 +237,8 @@ class SimulationRequest:
             # Include sorted launch args that affect simulation
             *sorted(f"{k}={v}" for k, v in self.launch_args.items()
                     if k in _RESTART_TRIGGERING_ARGS),
+            *sorted(f"env:{k}={v}" for k, v in self.env_vars.items()
+                    if k in _RESTART_TRIGGERING_ENV_VARS),
         ]
         key = "|".join(key_parts)
         return hashlib.md5(key.encode()).hexdigest()[:12]
@@ -249,7 +254,7 @@ class SimulationRequest:
             package=self.package,
             launch_file=self.launch_file,
             launch_args=self.launch_args,
-            env_vars=env_vars or {},
+            env_vars={**self.env_vars, **(env_vars or {})},
             startup_timeout_sec=startup_timeout,
             gazebo_startup_delay_sec=gazebo_delay,
         )
@@ -263,6 +268,12 @@ _RESTART_TRIGGERING_ARGS: Set[str] = {
     "model",
     "vehicle",
     "headless",
+}
+
+_RESTART_TRIGGERING_ENV_VARS: Set[str] = {
+    "TURTLEBOT3_MODEL",
+    "GZ_PARTITION",
+    "ROS_DOMAIN_ID",
 }
 
 
@@ -359,6 +370,7 @@ class SimulationManager:
         startup_timeout: float = 60.0,
         gazebo_delay: float = 5.0,
         require_sim: bool = True,
+        allow_global_cleanup: bool = False,
     ) -> bool:
         """
         Request a simulation with the given configuration.
@@ -372,6 +384,8 @@ class SimulationManager:
             startup_timeout: Max time to wait for startup
             gazebo_delay: Additional delay after Gazebo detected
             require_sim: If True, raises if sim can't start
+            allow_global_cleanup: If True, permit destructive global
+                pattern-based cleanup of unresponsive ROS/Gazebo processes
 
         Returns:
             True if simulation is ready
@@ -381,6 +395,7 @@ class SimulationManager:
         """
         with self._lock:
             request_hash = request.config_hash()
+            acquired_lock_for_request = False
 
             # Check if we can reuse current simulation
             if self._can_reuse(request_hash):
@@ -390,10 +405,11 @@ class SimulationManager:
             # Acquire exclusive file lock before (re)starting
             if self._lock_handle is None:
                 self._lock_handle = _acquire_gazebo_lock()
+                acquired_lock_for_request = True
 
             # Need to (re)start simulation
             if self._launcher is not None and self._started_by_us:
-                self._stop_internal()
+                self._stop_internal(allow_global_cleanup=allow_global_cleanup)
 
             # Check if a functional simulation is already running externally
             # BEFORE changing domain ID — the external sim may be on a
@@ -417,10 +433,24 @@ class SimulationManager:
                 self._active_users += 1
                 return True
 
-            # If processes exist but aren't responsive, kill them (zombie cleanup)
+            # If processes exist but aren't responsive, fail closed unless the
+            # caller explicitly opts into global pattern-based cleanup.
             if self._gazebo.is_running():
-                print("[SimManager] Killing unresponsive Gazebo processes",
-                      flush=True)
+                message = (
+                    "Unresponsive external Gazebo processes detected. "
+                    "Refusing global cleanup without "
+                    "allow_global_cleanup=True."
+                )
+                if not allow_global_cleanup:
+                    if acquired_lock_for_request:
+                        _release_gazebo_lock(self._lock_handle)
+                        self._lock_handle = None
+                    if require_sim:
+                        raise RuntimeError(message)
+                    print(f"[SimManager] {message}", flush=True)
+                    return False
+                print("[SimManager] Explicit global cleanup enabled for "
+                      "unresponsive Gazebo processes", flush=True)
                 self._gazebo.kill_all_sim_processes()
                 time.sleep(1.0)  # Brief wait for processes to terminate
 
@@ -443,6 +473,7 @@ class SimulationManager:
             self._isolation_domain_id = random.randint(100, 199)
             os.environ['ROS_DOMAIN_ID'] = str(self._isolation_domain_id)
             os.environ['GZ_PARTITION'] = f'gz_test_{self._isolation_domain_id}'
+            os.environ['IGN_PARTITION'] = f'gz_test_{self._isolation_domain_id}'
             print(f"[SimManager] Domain ID set to {self._isolation_domain_id}",
                   flush=True)
 
@@ -478,18 +509,24 @@ class SimulationManager:
             if self._active_users > 0:
                 self._active_users -= 1
 
-    def stop(self, force: bool = False) -> None:
+    def stop(
+        self,
+        force: bool = False,
+        allow_global_cleanup: bool = False,
+    ) -> None:
         """
         Stop the simulation.
 
         Args:
             force: If True, stop even if other users are active
+            allow_global_cleanup: If True, permit destructive global
+                pattern-based cleanup after owned process teardown
         """
         with self._lock:
             if not force and self._active_users > 0:
                 return
 
-            self._stop_internal()
+            self._stop_internal(allow_global_cleanup=allow_global_cleanup)
             self._active_users = 0
 
     def restart(
@@ -497,6 +534,7 @@ class SimulationManager:
         request: Optional[SimulationRequest] = None,
         startup_timeout: float = 60.0,
         gazebo_delay: float = 5.0,
+        allow_global_cleanup: bool = False,
     ) -> bool:
         """
         Force restart the simulation.
@@ -505,6 +543,7 @@ class SimulationManager:
             request: New config (uses current if None)
             startup_timeout: Max time to wait for startup
             gazebo_delay: Additional delay after Gazebo detected
+            allow_global_cleanup: If True, permit destructive global cleanup
 
         Returns:
             True if simulation restarted successfully
@@ -516,7 +555,7 @@ class SimulationManager:
             if request is None:
                 return False
 
-            self._stop_internal()
+            self._stop_internal(allow_global_cleanup=allow_global_cleanup)
 
             # Wait for all Gazebo processes to fully exit before restarting.
             # kill_gazebo() sends SIGKILL but doesn't wait for process exit.
@@ -572,6 +611,7 @@ class SimulationManager:
         if self._isolation_domain_id is not None:
             env_vars['ROS_DOMAIN_ID'] = str(self._isolation_domain_id)
             env_vars['GZ_PARTITION'] = f'gz_test_{self._isolation_domain_id}'
+            env_vars['IGN_PARTITION'] = f'gz_test_{self._isolation_domain_id}'
 
         config = request.to_launch_config(
             env_vars=env_vars,
@@ -584,13 +624,14 @@ class SimulationManager:
             self._launcher.stop()  # Clean up so next attempt doesn't hit "already running"
         return success
 
-    def _stop_internal(self) -> None:
+    def _stop_internal(self, allow_global_cleanup: bool = False) -> None:
         """Internal method to stop simulation (must hold lock)."""
         if self._launcher is not None:
             self._launcher.stop()
 
-        # Also kill any orphaned Gazebo and ROS sim processes
-        self._gazebo.kill_all_sim_processes()
+        if allow_global_cleanup:
+            print("[SimManager] Explicit global cleanup enabled", flush=True)
+            self._gazebo.kill_all_sim_processes()
 
         self._current_request = None
         self._current_hash = ""
