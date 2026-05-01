@@ -141,10 +141,11 @@ class JamaResultCollector:
     # ---- session output ----------------------------------------------------
 
     def pytest_sessionfinish(self, session, exitstatus):
-        xlsx_path = self.config.getoption("jama_xlsx")
+        xlsx_path = self.config.getoption("jama_xlsx") or os.environ.get("PYTEST_JAMA_XLSX")
         if not xlsx_path or not self.results:
             return
-        project_key = self.config.getoption("jama_project")
+        project_key = self.config.getoption("jama_project") or os.environ.get(
+            "PYTEST_JAMA_PROJECT", "DCE")
         try:
             _write_jama_xlsx(self.results, xlsx_path, project_key)
             session.config.get_terminal_writer().write(
@@ -201,13 +202,9 @@ def _failure_message(report) -> str:
 
 
 def _write_jama_xlsx(results: List[_Result], path: str, project_key: str) -> None:
-    """Write a Jama Connect Excel-import-compatible workbook."""
-    from openpyxl import Workbook
+    """Write or append to a Jama Connect Excel-import-compatible workbook."""
+    from openpyxl import Workbook, load_workbook
     from openpyxl.styles import Alignment, Font, PatternFill
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Test Results"
 
     headers = [
         "Item ID",
@@ -220,18 +217,37 @@ def _write_jama_xlsx(results: List[_Result], path: str, project_key: str) -> Non
         "Execution Date",
         "Duration (s)",
     ]
-    ws.append(headers)
 
     header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True)
+
+    execution_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Ensure parent directory exists before reading/writing the workbook.
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    if os.path.exists(path):
+        wb = load_workbook(path)
+        ws = wb["Test Results"] if "Test Results" in wb.sheetnames else wb.active
+        if ws.max_row < 1:
+            ws.title = "Test Results"
+            ws.append(headers)
+        existing_count = max(ws.max_row - 1, 0)
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Test Results"
+        ws.append(headers)
+        existing_count = 0
+
     for cell in ws[1]:
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center")
 
-    execution_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    for i, r in enumerate(results, start=1):
+    for i, r in enumerate(results, start=existing_count + 1):
         item_id = f"{project_key}-TR-{i:04d}"
         ws.append([
             item_id,
@@ -263,18 +279,31 @@ def _write_jama_xlsx(results: List[_Result], path: str, project_key: str) -> Non
         ws.column_dimensions[col_letter].width = max_len + 4
 
     # Summary sheet
-    ws2 = wb.create_sheet("Summary")
+    if "Summary" in wb.sheetnames:
+        ws2 = wb["Summary"]
+        ws2.delete_rows(1, ws2.max_row)
+    else:
+        ws2 = wb.create_sheet("Summary")
     ws2.append(["Metric", "Value"])
     for cell in ws2[1]:
         cell.fill = header_fill
         cell.font = header_font
 
-    total = len(results)
-    passed  = sum(1 for r in results if r.status == "PASSED")
-    failed  = sum(1 for r in results if r.status == "FAILED")
-    skipped = sum(1 for r in results if r.status == "NOT_RUN")
-    blocked = sum(1 for r in results if r.status == "BLOCKED")
-    tagged  = sum(1 for r in results if r.requirement_id)
+    all_rows = list(ws.iter_rows(min_row=2, values_only=True))
+    statuses = [row[4] for row in all_rows if len(row) > 4]
+    total = len(all_rows)
+    passed = sum(1 for status in statuses if status == "PASSED")
+    failed = sum(1 for status in statuses if status == "FAILED")
+    skipped = sum(1 for status in statuses if status == "NOT_RUN")
+    blocked = sum(1 for status in statuses if status == "BLOCKED")
+    tagged = sum(1 for row in all_rows if len(row) > 1 and row[1])
+    total_duration = 0.0
+    for row in all_rows:
+        if len(row) > 8 and row[8] is not None:
+            try:
+                total_duration += float(row[8])
+            except (TypeError, ValueError):
+                pass
 
     ws2.append(["Project", project_key])
     ws2.append(["Execution Date", execution_date])
@@ -285,13 +314,9 @@ def _write_jama_xlsx(results: List[_Result], path: str, project_key: str) -> Non
     ws2.append(["Blocked", blocked])
     ws2.append(["Pass Rate", f"{passed / total * 100:.1f}%" if total else "N/A"])
     ws2.append(["Tagged with Requirement ID", tagged])
-    ws2.append(["Total Duration (s)", round(sum(r.duration_s for r in results), 1)])
+    ws2.append(["Total Duration (s)", round(total_duration, 1)])
 
     for col in ws2.columns:
         ws2.column_dimensions[col[0].column_letter].width = 28
 
-    # Ensure parent directory exists.
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
     wb.save(path)
