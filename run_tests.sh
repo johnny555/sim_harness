@@ -14,6 +14,7 @@ NC='\033[0m' # No Color
 RERUN_FAILED=false
 SKIP_BUILD=false
 TEST_TYPE="all"  # all, unit, integration
+SIM_UI_MODE="auto"  # auto, gui, headless
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -22,6 +23,8 @@ usage() {
     echo "  -r, --rerun-failed    Rerun only tests that failed in the previous run"
     echo "  -s, --skip-build      Skip the build step"
     echo "  -t, --type TYPE       Run specific test type: all, unit, integration (default: all)"
+    echo "      --gui             Prefer simulator GUI for launches that support headless:=..."
+    echo "      --headless        Force headless mode for launches that support headless:=..."
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Examples:"
@@ -29,6 +32,7 @@ usage() {
     echo "  $0 -s                 # Skip build, run all tests"
     echo "  $0 -t unit            # Run only unit tests (Python + C++)"
     echo "  $0 -t integration     # Run only integration tests"
+    echo "  $0 --gui -t integration  # Show simulator GUI when supported"
     echo "  $0 -r                 # Rerun failed tests from last run"
     exit 0
 }
@@ -46,6 +50,14 @@ while [[ $# -gt 0 ]]; do
         -t|--type)
             TEST_TYPE="$2"
             shift 2
+            ;;
+        --gui)
+            SIM_UI_MODE="gui"
+            shift
+            ;;
+        --headless)
+            SIM_UI_MODE="headless"
+            shift
             ;;
         -h|--help)
             usage
@@ -69,15 +81,17 @@ echo -e "${YELLOW}sim_harness Test Runner${NC}"
 echo -e "${YELLOW}========================================${NC}"
 echo ""
 
-# Get the script's directory and workspace root
+# Get the package directory and workspace root.
+# This script lives at <workspace>/src/sim_harness, so anchor colcon one level
+# above src/ to keep build/install/log out of the package source tree.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Change to workspace directory
 cd "$WORKSPACE_ROOT"
 
 # Auto-detect install layout (merged vs isolated)
-INSTALL_LAYOUT_FILE="$SCRIPT_DIR/install/.colcon_install_layout"
+INSTALL_LAYOUT_FILE="$WORKSPACE_ROOT/install/.colcon_install_layout"
 COLCON_INSTALL_FLAG=""
 if [ -f "$INSTALL_LAYOUT_FILE" ]; then
     LAYOUT=$(cat "$INSTALL_LAYOUT_FILE")
@@ -89,6 +103,16 @@ if [ -f "$INSTALL_LAYOUT_FILE" ]; then
     fi
 else
     echo -e "${CYAN}No existing install layout detected, using default (isolated)${NC}"
+fi
+
+if [ "$SIM_UI_MODE" = "gui" ]; then
+    export SIM_HARNESS_HEADLESS=false
+    echo -e "${CYAN}Simulator UI mode: GUI when supported${NC}"
+elif [ "$SIM_UI_MODE" = "headless" ]; then
+    export SIM_HARNESS_HEADLESS=true
+    echo -e "${CYAN}Simulator UI mode: headless when supported${NC}"
+else
+    echo -e "${CYAN}Simulator UI mode: default launch behavior${NC}"
 fi
 
 # Clean up any existing Gazebo/simulation processes

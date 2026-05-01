@@ -48,6 +48,21 @@ def _ensure_rclpy_init():
             rclpy.init()
 
 
+def _apply_headless_override(launch_args: dict) -> dict:
+    """Apply an optional global headless override for compatible launches."""
+    override = os.environ.get('SIM_HARNESS_HEADLESS')
+    if override is None:
+        return dict(launch_args)
+
+    normalized = override.strip().lower()
+    if normalized not in {'true', 'false'}:
+        return dict(launch_args)
+
+    updated = dict(launch_args)
+    updated['headless'] = normalized
+    return updated
+
+
 class SimTestFixture:
     """Base class for ROS 2 simulation integration tests.
 
@@ -339,9 +354,10 @@ class SimTestFixture:
             return False
 
         manager = get_simulation_manager()
+        launch_args = _apply_headless_override(cls.LAUNCH_ARGS)
         req = SimulationRequest(
             package=cls.LAUNCH_PACKAGE, launch_file=cls.LAUNCH_FILE,
-            launch_args=cls.LAUNCH_ARGS, env_vars=cls.ENV_VARS,
+            launch_args=launch_args, env_vars=cls.ENV_VARS,
             world=cls.WORLD, robot_model=cls.ROBOT_MODEL,
         )
         try:

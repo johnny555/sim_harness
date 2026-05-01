@@ -82,7 +82,7 @@ def get_gazebo_environment_actions(package_name, models_subdir='models'):
     Returns:
         tuple of SetEnvironmentVariable actions:
             (gz_resource_path, gz_version, gz_plugin_path,
-             vk_layer_enables, vk_icd_filenames, vk_loader_debug)
+             gz_ip, ign_ip, vk_layer_enables, vk_icd_filenames, vk_loader_debug)
     """
     pkg_share = get_package_share_directory(package_name)
     models_path = os.path.join(pkg_share, models_subdir)
@@ -128,6 +128,25 @@ def get_gazebo_environment_actions(package_name, models_subdir='models'):
         value=plugin_path,
     )
 
+    # Gazebo Transport discovery can bind to the wrong interface on hosts with
+    # VPNs or multiple NICs, which breaks cross-process discovery during tests.
+    # Default to loopback unless the caller has set an explicit value.
+    gz_ip_value = os.environ.get('GZ_IP') or '127.0.0.1'
+    ign_ip_value = os.environ.get('IGN_IP') or gz_ip_value
+
+    os.environ['GZ_IP'] = gz_ip_value
+    os.environ['IGN_IP'] = ign_ip_value
+
+    gz_ip = SetEnvironmentVariable(
+        name='GZ_IP',
+        value=gz_ip_value,
+    )
+
+    ign_ip = SetEnvironmentVariable(
+        name='IGN_IP',
+        value=ign_ip_value,
+    )
+
     # Vulkan workarounds for OGRE2
     os.environ['VK_INSTANCE_LAYERS'] = ''
     vk_layer_enables = SetEnvironmentVariable(
@@ -148,4 +167,5 @@ def get_gazebo_environment_actions(package_name, models_subdir='models'):
     )
 
     return (gz_resource_path, gz_version, gz_plugin_path,
+            gz_ip, ign_ip,
             vk_layer_enables, vk_icd_filenames, vk_loader_debug)
